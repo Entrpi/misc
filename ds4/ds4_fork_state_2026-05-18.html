@@ -158,7 +158,7 @@ The first two compound to <strong>5.88&times; prefill throughput</strong> on the
 
   <div class="card">
     <h4>2 &mdash; A better way to lay out 80 GB of weights</h4>
-    <p>GPUs have a small cache for "where in physical memory does this virtual address live?" lookups. The default way ds4 allocated weights uses 4 KB pages, which means an 80 GB model needs ~20 million page-table entries. The cache misses constantly. The fork uses a CUDA driver API to allocate the same memory with 2 MB pages instead &mdash; 500&times; fewer entries, dramatically fewer misses. Another 2&times; on prefill throughput. No setup. Single-process runs just get it.</p>
+    <p>GPU math speed depends partly on <em>where</em> the weights live in memory &mdash; specifically, whether each tensor's base address sits on a big alignment boundary that the GPU's caches and tile-load hardware can exploit. cudaMalloc packs all ~80 GB of weights into one big chunk at arbitrary internal offsets. The fork uses a CUDA driver API to allocate each weight tensor at its own 2 MB-aligned virtual address. That single change lets the matmul kernels coalesce tile loads and hit L2 more reliably &mdash; discrete-GPU prefill jumps about <strong>2&times;</strong> from this layout alone. No setup; single-process runs just get it. (The same alignment also produces a small, deterministic FP32 reduction-order drift on tight-margin tokens; same root cause, documented in <code>misc/cuda-env-vars.md</code>.)</p>
     <p class="meta" style="margin:6px 0 0;">Pillar 4.2 (in-process VMM arena)</p>
   </div>
 
@@ -341,7 +341,9 @@ Each kernel sequence in the mmvq routed-MoE decode block and the n_tok=1 dense Q
 </p>
 
 <p>
-Background: when ds4 loads weights via <code>cudaMalloc</code>, the driver hands back 4 KiB-page-backed device memory. On an 80 GiB model this means ~20 M page table entries, with TLB pressure that bottlenecks prefill on discrete GPUs even after the compute upgrade above. The <code>ds4_weight_server</code> sidecar already avoids this by using the CUDA Driver VMM API (<code>cuMemCreate</code>) which produces 2 MiB-page-backed allocations. The fork extracts the same machinery into the in-process path so single-process runs (<code>ds4-bench</code>, <code>ds4-server</code>, one-shot CLI) reach the same prefill ceiling without spawning a sidecar.
+Background: when ds4 loads weights via <code>cudaMalloc</code>, the legacy arena packs all ~80&nbsp;GB of weights into one large chunk where each tensor sits at an arbitrary 256-byte-aligned internal offset.  The <code>ds4_weight_server</code> sidecar avoids this by using the CUDA Driver VMM API (<code>cuMemCreate</code> + <code>cuMemAddressReserve</code> per range), giving each weight tensor its own 2&nbsp;MiB-aligned virtual address.  The fork extracts the same machinery into the in-process path so single-process runs (<code>ds4-bench</code>, <code>ds4-server</code>, one-shot CLI) reach the same prefill ceiling without spawning a sidecar.
+
+The chunk-size bisect we ran during this work updated our understanding of <em>why</em> the VMM arena is fast.  The original framing ("2 MiB pages reduce TLB pressure") is incomplete: VMM with one large 1792 MiB chunk performs identically to <code>cudaMalloc</code> (~1080 t/s prefill on PRO 6000), even though the cuMemCreate-backed memory is still 2 MiB-paged.  The actual differentiator is <strong>per-tensor 2 MiB-aligned base addresses</strong>: when each weight tensor sits at its own fresh <code>cuMemAddressReserve</code>-handed VA, matmul kernels' tile-load coalescing and L2 spatial-locality patterns improve enough to roughly double prefill.  Pack the same VMM-paged memory into one big chunk and the bases land at sub-granularity offsets &mdash; the perf advantage disappears.
 </p>
 
 <h4>Mechanism</h4>
@@ -396,7 +398,7 @@ Background: when ds4 loads weights via <code>cudaMalloc</code>, the driver hands
     <rect x="700" y="50" width="14" height="3" fill="#7a8497"/>
     <text x="720" y="55" class="label">PRO 6000 arena (legacy cudaMalloc 4 KiB pages)</text>
     <rect x="700" y="70" width="14" height="3" fill="#7ee0c1"/>
-    <text x="720" y="75" class="label">PRO 6000 in-process VMM (2 MiB pages, new default)</text>
+    <text x="720" y="75" class="label">PRO 6000 in-process VMM (per-tensor 2 MiB-aligned bases, new default)</text>
     <rect x="700" y="90" width="14" height="3" fill="#88b8ff"/>
     <text x="720" y="95" class="label">GB10 arena/VMM (overlap &mdash; no delta on integrated)</text>
   </g>
@@ -406,7 +408,7 @@ Background: when ds4 loads weights via <code>cudaMalloc</code>, the driver hands
 
 <h4>Why GB10 is neutral and that's fine</h4>
 <p>
-On the integrated Spark, weights live in the same LPDDR5X pool as everything else. The driver page-table layout for cudaMalloc is already 2 MiB-aligned there, so VMM yields no measurable delta (&minus;0.16% mean across the sweep, no row worse than &minus;0.75%). The earlier worry that integrated GPUs would OOM under VMM was wrong &mdash; the weight server has run on GB10 with <code>--reserve-gb 24</code> for weeks; in-process VMM has the same memory profile.
+On the integrated Spark, weights live in the same LPDDR5X pool as everything else and the per-tensor-base-alignment effect that drives the discrete-GPU win doesn't translate &mdash; VMM yields no measurable delta (&minus;0.16% mean across the sweep, no row worse than &minus;0.75%). The earlier worry that integrated GPUs would OOM under VMM was wrong &mdash; the weight server has run on GB10 with <code>--reserve-gb 24</code> for weeks; in-process VMM has the same memory profile.
 </p>
 
 <h3 id="t-ws">4.3 CUDA weight server sidecar</h3>
@@ -435,7 +437,7 @@ A standalone CUDA process that owns the weight allocations and exposes them to o
 <table>
   <thead><tr><th>Workload</th><th>Recommended path</th><th>Why</th></tr></thead>
   <tbody>
-    <tr><td>One-shot <code>./ds4 -p ...</code>, single <code>ds4-bench</code>, single <code>ds4-server</code></td><td class="good">In-process VMM arena (auto)</td><td>Same 2 MiB-page layout, zero setup tax.</td></tr>
+    <tr><td>One-shot <code>./ds4 -p ...</code>, single <code>ds4-bench</code>, single <code>ds4-server</code></td><td class="good">In-process VMM arena (auto)</td><td>Same per-tensor 2 MiB-aligned base layout as the sidecar, zero setup tax.</td></tr>
     <tr><td>Proof harness running N profiles in parallel</td><td class="good">Weight server, scope=base</td><td>Base upload (~20&ndash;70 s, NVMe-dependent) amortised over N workers.</td></tr>
     <tr><td>MTP correctness work (base + MTP gguf concurrent)</td><td class="good">Weight server, scope=both</td><td>Single-allocation fragmentation can OOM even with sufficient free VRAM.</td></tr>
     <tr><td>Multi-profile bench sweeps</td><td class="good">Weight server, scope=base</td><td>Same as proof harness.</td></tr>
@@ -877,7 +879,7 @@ Both CUDA rows use the imatrix-tuned q2 variant (<code>...-imatrix.gguf</code>) 
     <line x1="730" y1="96" x2="730" y2="112" stroke="#7ee0c1" marker-end="url(#a2)"/>
     <!-- VMM arena box -->
     <rect x="460" y="112" width="540" height="60" fill="#181c24" stroke="#7ee0c1"/>
-    <text x="730" y="132" class="label" text-anchor="middle">In-process VMM arena (cuMemCreate, 2 MiB pages)</text>
+    <text x="730" y="132" class="label" text-anchor="middle">In-process VMM arena (cuMemCreate per tensor, 2 MiB-aligned bases)</text>
     <text x="730" y="150" class="small" text-anchor="middle">or, when DS4_CUDA_WEIGHT_IPC_MANIFEST set:</text>
     <text x="730" y="164" class="small" text-anchor="middle" fill="#88b8ff">imports VMM ranges from ds4_weight_server via Unix-socket broker</text>
     <line x1="730" y1="172" x2="730" y2="186" stroke="#7ee0c1" marker-end="url(#a2)"/>
