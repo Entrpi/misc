@@ -1,0 +1,870 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>ds4 fork: state of the work vs antirez/ds4 main (2026-05-18)</title>
+<style>
+  :root{
+    --bg:#0f1117; --bg2:#181c24; --bg3:#222631;
+    --fg:#e9edf3; --fg2:#c5cdd9; --fg3:#92a0b3;
+    --acc:#7ee0c1; --acc2:#88b8ff; --warn:#ffcb6b; --bad:#ff7c8c; --neut:#b6a4ff;
+    --line:#2c323d;
+  }
+  html,body{background:var(--bg);color:var(--fg);font-family:-apple-system,Segoe UI,Inter,Helvetica,Arial,sans-serif;line-height:1.55;margin:0;}
+  body{max-width:1180px;margin:0 auto;padding:32px 28px 80px;}
+  h1{font-size:30px;letter-spacing:-0.01em;margin:0 0 4px;}
+  h2{font-size:22px;margin:36px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--line);}
+  h3{font-size:17px;margin:24px 0 8px;color:var(--acc);}
+  h4{font-size:15px;margin:18px 0 6px;color:var(--acc2);}
+  .sub{color:var(--fg3);margin:0 0 28px;}
+  code{background:var(--bg3);padding:1px 5px;border-radius:3px;color:var(--acc);font-size:0.92em;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  pre{background:var(--bg2);border:1px solid var(--line);border-radius:6px;padding:14px 16px;overflow-x:auto;font-size:13px;line-height:1.45;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--fg2);}
+  table{border-collapse:collapse;width:100%;margin:10px 0 18px;font-size:14px;}
+  th,td{border-bottom:1px solid var(--line);padding:6px 10px;text-align:right;vertical-align:top;}
+  th{color:var(--fg3);font-weight:500;}
+  th:first-child, td:first-child{text-align:left;}
+  td.good{color:var(--acc);}
+  td.bad{color:var(--bad);}
+  td.neutral{color:var(--fg3);}
+  td.warn{color:var(--warn);}
+  ul li, ol li{margin:5px 0;}
+  .callout{border-left:3px solid var(--acc);background:var(--bg2);padding:10px 14px;margin:14px 0;border-radius:0 4px 4px 0;}
+  .callout.warn{border-left-color:var(--warn);}
+  .callout.bad{border-left-color:var(--bad);}
+  .tag{display:inline-block;background:var(--bg3);color:var(--acc);padding:1px 7px;border-radius:99px;font-size:12px;margin-right:4px;margin-bottom:2px;}
+  .tag.warn{color:var(--warn);}
+  .tag.neut{color:var(--neut);}
+  .tag.acc2{color:var(--acc2);}
+  figure{margin:14px 0 22px;}
+  figcaption{color:var(--fg3);font-size:12.5px;margin-top:6px;text-align:center;}
+  .toc{background:var(--bg2);border:1px solid var(--line);border-radius:6px;padding:16px 22px;font-size:14px;}
+  .toc ol{margin:6px 0 0 18px;padding:0;}
+  .toc a{color:var(--acc2);text-decoration:none;}
+  .toc a:hover{text-decoration:underline;}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px;}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:18px;}
+  .card{background:var(--bg2);border:1px solid var(--line);border-radius:6px;padding:14px 16px;}
+  .card h4{margin-top:0;color:var(--acc);}
+  .num{font-size:28px;font-weight:600;color:var(--acc);letter-spacing:-0.01em;}
+  .num.small{font-size:18px;}
+  .num.warn{color:var(--warn);}
+  .num.bad{color:var(--bad);}
+  .num.neut{color:var(--neut);}
+  .lbl{color:var(--fg3);font-size:12.5px;margin-top:2px;}
+  svg .axis text{fill:var(--fg3);font-size:11px;}
+  svg .axis line, svg .axis path{stroke:var(--line);fill:none;}
+  svg .grid line{stroke:var(--line);stroke-dasharray:2 3;}
+  svg text.title{fill:var(--fg);font-size:13px;}
+  svg text.small{fill:var(--fg3);font-size:10.5px;}
+  svg text.label{fill:var(--fg2);font-size:11.5px;}
+  svg .bar.upstream{fill:#5a6376;}
+  svg .bar.fork{fill:var(--acc);}
+  svg .bar.warn{fill:var(--warn);}
+  svg .line.arena{stroke:#7a8497;stroke-width:2;fill:none;}
+  svg .line.vmm{stroke:var(--acc);stroke-width:2.2;fill:none;}
+  svg .line.gb10{stroke:var(--acc2);stroke-width:2;fill:none;}
+  svg .dot{fill:var(--acc);}
+  svg .dot.gb10{fill:var(--acc2);}
+  hr{border:none;border-top:1px solid var(--line);margin:28px 0;}
+  .meta{color:var(--fg3);font-size:12.5px;}
+</style>
+</head>
+<body>
+
+<h1>ds4 fork: state of the work vs antirez/ds4 main</h1>
+<p class="sub">PR-prep snapshot on branch <code>pr-prep-2026-05-18</code> (HEAD <code>8294755</code>, branched from <code>restore-cublas-and-dispatch</code>).
+118 non-merge commits and 2 upstream merges ahead of <code>origin/main</code> at <code>c9dd9499</code>.
+30,445 lines added, 313 deleted across 50 files. Three pillars: CUDA mmq lift, in-process VMM weight arena + sidecar, generalized engine proof harness.</p>
+
+<div class="toc">
+<strong>Contents</strong>
+<ol>
+  <li><a href="#executive">Executive summary</a></li>
+  <li><a href="#scope">Scope &mdash; what changed where</a></li>
+  <li><a href="#themes">Themes (eight pillars, with intent and impact)</a>
+    <ol>
+      <li><a href="#t-mmq">CUDA mmq kernel lift (vendored llama.cpp)</a></li>
+      <li><a href="#t-vmm">In-process CUDA VMM weight arena</a></li>
+      <li><a href="#t-ws">CUDA weight server sidecar</a></li>
+      <li><a href="#t-proof">Generalized engine proof harness</a></li>
+      <li><a href="#t-mtp">MTP exact verifier path</a></li>
+      <li><a href="#t-correctness">Correctness gates (Option D, dispatcher, merge fix)</a></li>
+      <li><a href="#t-bench">Bench, observability, server</a></li>
+      <li><a href="#t-docs">Documentation &amp; vendor pin</a></li>
+    </ol>
+  </li>
+  <li><a href="#results">Performance results (charts &amp; tables)</a></li>
+  <li><a href="#api">Public surface, env vars, and back-compat</a></li>
+  <li><a href="#arch">Architectural impact diagram</a></li>
+  <li><a href="#risk">Risks, known issues, gaps</a></li>
+  <li><a href="#pr">Path to upstreaming</a></li>
+  <li><a href="#appendix">Appendix &mdash; commit-by-commit by theme</a></li>
+</ol>
+</div>
+
+<h2 id="executive">1. Executive summary</h2>
+
+<div class="grid3">
+  <div class="card"><h4>Prefill ceiling</h4>
+    <div class="num">5.88&times;</div>
+    <div class="lbl">PRO 6000 Blackwell ctx=2048: <strong>2193 t/s</strong> on the fork (mmq dispatch + in-process VMM arena) vs <strong>373 t/s</strong> upstream baseline (cublas + cudaMalloc 4 KiB pages). Compound of 2.93&times; from mmq dispatch and 2.04&times; from VMM page layout.</div>
+  </div>
+  <div class="card"><h4>Setup tax</h4>
+    <div class="num">0 s</div>
+    <div class="lbl">Single-process runs reach the weight-server ceiling within 0.07% with no sidecar, no manifest, no broker socket.</div>
+  </div>
+  <div class="card"><h4>Sidecar payoff</h4>
+    <div class="num">N&minus;1</div>
+    <div class="lbl">The weight server amortises the ~67 s base upload across N concurrent workers (proof harness, profile sweeps, MTP correctness).</div>
+  </div>
+  <div class="card"><h4>Vendored kernels</h4>
+    <div class="num neut">15.8 k</div>
+    <div class="lbl">LOC under <code>cuda/mmq/</code>: pinned to llama.cpp <code>5c0e9468</code> with a thin ds4 adapter; replaces the Q8&rarr;FP16 expansion cache + cublasGemmEx path on every validated arch.</div>
+  </div>
+  <div class="card"><h4>Proof runner</h4>
+    <div class="num acc2">5-tuple</div>
+    <div class="lbl">profile &times; suite &times; prompt &times; budget &times; contract. Owns weight-server lifecycle, enforces parent-PID exit, emits a single pass/fail verdict.</div>
+  </div>
+  <div class="card"><h4>CUDA MTP</h4>
+    <div class="num neut">enabled</div>
+    <div class="lbl">CUDA speculative decoding path landed end-to-end &mdash; top-2 draft, paired Q/KV, exact 2-token verifier, acceptance-history gating, session-snapshot persistence. Ships as <strong>experimental</strong>: throughput is currently neutral-to-negative vs no-MTP, so it is opt-in and the showcase config remains <code>best-nomtp</code>.</div>
+  </div>
+</div>
+
+<div class="callout" style="margin-top:18px">
+<strong>One-line framing:</strong> the fork has reorganised the CUDA backend around three independent components &mdash; a vendored matmul kernel family (mmq/mmvq), a memory-layout pipeline (VMM arena in-process; sidecar across processes), and a proof harness that makes the first two upgradeable without losing argmax determinism. Each component is independently useful and independently revertable.
+</div>
+
+<h2 id="scope">2. Scope &mdash; what changed where</h2>
+
+<table>
+  <thead><tr><th>Class</th><th>Files</th><th>Added</th><th>Deleted</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td>New &mdash; vendored mmq</td><td>23 under <code>cuda/mmq/</code></td><td class="good">15,788</td><td class="neutral">0</td><td>llama.cpp pinned at <code>5c0e9468</code> + adapter</td></tr>
+    <tr><td>New &mdash; weight server</td><td><code>tools/ds4_weight_server.cu</code></td><td class="good">1,802</td><td class="neutral">0</td><td>VMM + IPC backends, broker, manifest</td></tr>
+    <tr><td>New &mdash; proof harness</td><td><code>tests/ds4_proof.py</code>, <code>cuda_mtp_proof_matrix.py</code>, <code>ds4_weight_server_harness_smoke.py</code>, <code>proof/*.json</code></td><td class="good">2,551</td><td class="neutral">0</td><td>generalized 5-tuple runner</td></tr>
+    <tr><td>New &mdash; mmq tests</td><td><code>cuda/mmq/test/*</code>, <code>tests/mmq_bench_stats.py</code>, <code>tests/run_mmq_bench.sh</code></td><td class="good">1,672</td><td class="neutral">0</td><td>parity vs CPU reference; bench harness</td></tr>
+    <tr><td>New &mdash; docs</td><td><code>AGENT.md</code>, <code>docs/cuda-mtp/README.md</code>, <code>docs/proof-harness/README.md</code>, <code>cuda/mmq/VENDOR.md</code>, <code>speed-bench/.../README.md</code></td><td class="good">1,026</td><td class="neutral">0</td><td>operator guides, env-var inventory, vendor pin</td></tr>
+    <tr><td>Modified &mdash; core engine</td><td><code>ds4.c</code></td><td class="good">4,495</td><td class="bad">202</td><td>MTP exact verifier, accept-gate state, helpers</td></tr>
+    <tr><td>Modified &mdash; CUDA backend</td><td><code>ds4_cuda.cu</code>, <code>ds4_gpu.h</code></td><td class="good">3,380</td><td class="bad">81</td><td>mmq/mmvq/graph wiring, VMM arena, fd-cache binding</td></tr>
+    <tr><td>Modified &mdash; bench/CLI/server</td><td><code>ds4_bench.c</code>, <code>ds4_cli.c</code>, <code>ds4_server.c</code></td><td class="good">358</td><td class="bad">8</td><td>steady-state gen_tps, no-MTP baselines, token_ids SSE</td></tr>
+    <tr><td>Modified &mdash; misc</td><td><code>Makefile</code>, <code>.gitignore</code>, <code>README.md</code>, <code>ds4.h</code>, <code>ds4_metal.m</code></td><td class="good">377</td><td class="bad">22</td><td>build glue + Metal counterparts to GPU API extensions</td></tr>
+    <tr><th>Total</th><th>50 files</th><th class="good">30,445</th><th class="bad">313</th><th>118 non-merge commits + 2 upstream merges</th></tr>
+  </tbody>
+</table>
+
+<h2 id="themes">3. Themes</h2>
+
+<h3 id="t-mmq">3.1 CUDA mmq kernel lift &mdash; vendored llama.cpp matmul family</h3>
+<p>
+<span class="tag">25 commits</span><span class="tag">15.8 k LOC vendored</span><span class="tag">+ adapter ~2 k</span><span class="tag acc2">phases 0&ndash;8</span>
+</p>
+
+<p>
+The previous CUDA backend dispatched every Q8_0 dense matmul through a Q8&rarr;FP16 expansion cache plus <code>cublasGemmEx</code>. Profile of the V4 Flash IQ2XXS w2Q2K AProjQ8 SExpQ8 OutQ8 model at ctx=2048 showed the expansion + GEMM as the dominant prefill cost: 373 t/s on PRO 6000 Blackwell. The fork vendors llama.cpp's <code>mul_mat_q</code> family (templated stream-k + tensor-core MMA) verbatim under <code>cuda/mmq/</code> and wires it in through a thin ds4-side adapter (<code>ds4_ggml_stubs.{h,cu}</code>, <code>ds4_mmq.{h,cu}</code>).
+</p>
+
+<h4>Coverage matrix</h4>
+<table>
+  <thead><tr><th>Dispatch site</th><th>Quantization</th><th>n_tokens</th><th>Routed via</th></tr></thead>
+  <tbody>
+    <tr><td>Attention projections (Q/K/V/O), shared expert, lm_head</td><td>Q8_0</td><td>&ge; 2 (prefill)</td><td><code>ds4_mmq_q8_0_dense</code> (mmq matrix-shaped)</td></tr>
+    <tr><td>Attention projections decode</td><td>Q8_0</td><td>= 1</td><td><code>ds4_mmq_q8_0_dense_vec</code> (mmvq)</td></tr>
+    <tr><td>Dense Q4_K (e.g. attn_output_b)</td><td>Q4_K</td><td>&ge; 2</td><td><code>ds4_mmq_q4_K_dense</code></td></tr>
+    <tr><td>Routed MoE gate &amp; up</td><td>IQ2_XXS / Q4_K</td><td>&ge; 2</td><td><code>ds4_mmq_{iq2_xxs,q4_K}_moe</code> (paired API shares Q8_1 act)</td></tr>
+    <tr><td>Routed MoE down</td><td>Q2_K / Q4_K</td><td>&ge; 2</td><td><code>ds4_mmq_{q2_K,q4_K}_moe</code></td></tr>
+    <tr><td>Routed MoE decode</td><td>IQ2_XXS / Q2_K / Q4_K</td><td>= 1, n_expert_used &le; 8</td><td><code>ds4_mmq_*_moe_vec</code> (mmvq)</td></tr>
+  </tbody>
+</table>
+
+<h4>Dispatcher hierarchy (<code>DS4_CUDA_PREFILL_PATH</code>)</h4>
+<p>
+A startup-time strategy probe writes one of three resolved paths into a single dispatch variable, then the per-call hot path is a load of that variable. cuBLAS is initialised regardless of selection because we observed the cuBLAS init triggers driver state that makes mmq ~4&times; faster on sm_121.
+</p>
+
+<figure>
+<svg viewBox="0 0 1080 220" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Q8_0 prefill throughput by dispatch strategy">
+  <text x="540" y="22" class="title" text-anchor="middle">Q8_0 prefill throughput by dispatch (V4 Flash, ctx=2048, no weight server) &mdash; t/s</text>
+  <!-- Y axis -->
+  <g class="axis"><line x1="100" y1="50" x2="100" y2="180"/><line x1="100" y1="180" x2="1040" y2="180"/></g>
+  <g class="grid">
+    <line x1="100" y1="180" x2="1040" y2="180"/>
+    <line x1="100" y1="148" x2="1040" y2="148"/>
+    <line x1="100" y1="115" x2="1040" y2="115"/>
+    <line x1="100" y1="82"  x2="1040" y2="82"/>
+    <line x1="100" y1="50"  x2="1040" y2="50"/>
+  </g>
+  <g class="axis">
+    <text x="92" y="183" text-anchor="end">0</text>
+    <text x="92" y="151" text-anchor="end">300</text>
+    <text x="92" y="118" text-anchor="end">600</text>
+    <text x="92" y="85" text-anchor="end">900</text>
+    <text x="92" y="53" text-anchor="end">1200</text>
+  </g>
+  <!-- PRO 6000 group, x=130..520 -->
+  <g>
+    <text x="325" y="200" class="label" text-anchor="middle">PRO 6000 Blackwell sm_120 (~1.8 TB/s GDDR7)</text>
+    <!-- mmq=1092 -->
+    <rect class="bar fork" x="150" y="62" width="60" height="118"/>
+    <text x="180" y="55" class="label" text-anchor="middle">1092</text>
+    <text x="180" y="195" class="small" text-anchor="middle">mmq</text>
+    <!-- cublas=373 -->
+    <rect class="bar upstream" x="240" y="139" width="60" height="41"/>
+    <text x="270" y="132" class="label" text-anchor="middle">373</text>
+    <text x="270" y="195" class="small" text-anchor="middle">cublas</text>
+    <!-- warp8=373 -->
+    <rect class="bar warn" x="330" y="139" width="60" height="41"/>
+    <text x="360" y="132" class="label" text-anchor="middle">373</text>
+    <text x="360" y="195" class="small" text-anchor="middle">warp8</text>
+    <text x="465" y="80" class="small">2.93&times; mmq vs cublas</text>
+  </g>
+  <!-- GB10 group, x=600..980 -->
+  <g>
+    <text x="800" y="200" class="label" text-anchor="middle">GB10 Spark sm_121 (~546 GB/s LPDDR5X)</text>
+    <!-- mmq=458 -->
+    <rect class="bar fork" x="630" y="130" width="60" height="50"/>
+    <text x="660" y="123" class="label" text-anchor="middle">458</text>
+    <text x="660" y="195" class="small" text-anchor="middle">mmq</text>
+    <!-- cublas=401 -->
+    <rect class="bar upstream" x="720" y="136" width="60" height="44"/>
+    <text x="750" y="129" class="label" text-anchor="middle">401</text>
+    <text x="750" y="195" class="small" text-anchor="middle">cublas</text>
+    <!-- warp8=56 -->
+    <rect class="bar bad" x="810" y="174" width="60" height="6"/>
+    <text x="840" y="167" class="label" text-anchor="middle">56</text>
+    <text x="840" y="195" class="small" text-anchor="middle">warp8</text>
+    <text x="900" y="120" class="small">+14% mmq vs cublas</text>
+  </g>
+</svg>
+<figcaption>Bar: Q8_0 prefill t/s by dispatch strategy. mmq is the validated default on both arches; cublas remains as an escape hatch and warp8 is reserved for the MTP verifier (Option D, &sect;3.6).</figcaption>
+</figure>
+
+<h4>mmvq decode wedge (Step 6)</h4>
+<p>
+At <code>n_tokens=1</code> the matrix-shaped mmq path wastes column tiling on a single output column. We additionally vendor <code>mmvq.{cu,cuh}</code> and wire two decode-only sites:
+</p>
+<ul>
+  <li><code>routed_moe_launch</code> &mdash; gated on <code>n_tokens * n_expert_used &le; MMVQ_MAX_BATCH_SIZE</code> (8 on Blackwell). Two separate <code>moe_vec</code> calls preserve the DeepSeek V4 clamp epilogue exactly; the fused <code>moe_pair_vec</code> entry exists but isn't yet wired (fusion applies silu without clamp).</li>
+  <li><code>cuda_matmul_q8_0_tensor_labeled</code> for n_tok=1 attention projections via <code>ds4_mmq_q8_0_dense_vec</code>.</li>
+</ul>
+<p>
+Knobs: <code>DS4_CUDA_NO_MMVQ_DECODE=1</code> to opt out; <code>DS4_CUDA_MMVQ_DECODE_MAX_TOKENS=N</code> to extend mmvq into short prefill batches (still bound by the gate above).
+</p>
+
+<h4>CUDA Graph capture+replay (Step 8) &mdash; opt-in only</h4>
+<p>
+Each kernel sequence in the mmvq routed-MoE decode block and the n_tok=1 dense Q8_0 vec path is captured into a <code>cudaGraphExec_t</code> on first execution with a given (layer-shape, buffer-pointer) tuple. The MoE cache holds 256 entries; the dense Q8_0 cache holds 1024 entries. Replay eliminates ~5&ndash;15&micro;s of CPU&harr;driver round-trip per launch &mdash; the dominant overhead at decode where individual kernels are small.
+</p>
+<div class="callout warn">
+<strong>Default flipped back to OFF</strong> (<code>b66b5d6</code>) after external proof-harness validation on GB10 observed gross output corruption on a 32-token smoke with graphs ON that disappears with graphs OFF. The 10/10 bit-identical self-determinism check used to validate the original flip proves <em>self</em>-equivalence but not exact-byte equivalence vs legacy. Suspected cause: undeclared cross-stream dependency in the captured region (likely a pool-allocated buffer touched by an uncaptured kernel on stream=0). Re-enabling as default requires root-causing. Opt-in via <code>DS4_CUDA_MOE_GRAPHS=1</code>.
+</div>
+
+<h4>Parity tests</h4>
+<p>
+<code>cuda/mmq/test/test_mmq_parity.cu</code> (1,245 LOC) compares every wired mmq shape to a CPU reference at multiple n_tokens and tile widths. The bench harness <code>tests/run_mmq_bench.sh</code> + <code>tests/mmq_bench_stats.py</code> drove the X_max sweep that picked the default tile (X=128 vanilla wins on sm_120 by ~6&ndash;20% over X&isin;{32,64,96}).
+</p>
+
+<h3 id="t-vmm">3.2 In-process CUDA VMM weight arena</h3>
+<p>
+<span class="tag">5 commits</span><span class="tag">+170 LOC ds4_cuda.cu</span><span class="tag acc2">2.04&times; prefill on PRO 6000</span><span class="tag acc2">0% on GB10 (neutral)</span>
+</p>
+
+<p>
+Background: when ds4 loads weights via <code>cudaMalloc</code>, the driver hands back 4 KiB-page-backed device memory. On an 80 GiB model this means ~20 M page table entries, with TLB pressure that bottlenecks prefill on discrete GPUs even after the compute upgrade above. The <code>ds4_weight_server</code> sidecar already avoids this by using the CUDA Driver VMM API (<code>cuMemCreate</code>) which produces 2 MiB-page-backed allocations. The fork extracts the same machinery into the in-process path so single-process runs (<code>ds4-bench</code>, <code>ds4-server</code>, one-shot CLI) reach the same prefill ceiling without spawning a sidecar.
+</p>
+
+<h4>Mechanism</h4>
+<ol>
+  <li><code>cuda_vmm_arena_supported()</code> &mdash; on first call, probes <code>cuMemGetAllocationGranularity</code>. Hard-gated off when <code>DS4_CUDA_WEIGHT_IPC_MANIFEST</code> is set (sidecar already provides identical VMM ranges &mdash; running both would double-allocate). Soft-gated off via <code>DS4_CUDA_VMM_ARENA=0</code>.</li>
+  <li><code>cuda_vmm_arena_alloc(bytes, label)</code> &mdash; bump-pointer over the sequence <code>cuMemCreate(CU_MEM_HANDLE_TYPE_NONE)</code> &rarr; <code>cuMemAddressReserve</code> &rarr; <code>cuMemMap</code> &rarr; <code>cuMemSetAccess(PROT_READWRITE)</code>. Default chunk size = request size rounded up to granularity, matching the weight server's per-range allocation. Override via <code>DS4_CUDA_VMM_ARENA_CHUNK_MB=N</code>.</li>
+  <li><code>cuda_model_range_ptr_from_fd</code> hot path tries VMM first, falls back to the legacy <code>cuda_model_arena_alloc</code> (cudaMalloc) on probe failure.</li>
+  <li>Teardown via <code>cuda_vmm_arenas_release_all</code> from the existing <code>cuda_model_range_release_all</code> path.</li>
+</ol>
+
+<div class="callout">
+<strong>Why default chunk = request size:</strong> the first sanity probe used a 1024 MiB chunk and would have allocated 138 chunks for 138 weight ranges &mdash; 138 GiB on a 96 GiB card. Commit <code>6a89ea5</code> defaulted <code>mb=0</code> (chunk = request size). Verified post-fix: 138 chunks, 80.77 GiB allocated for 80.76 GiB raw (0.01% overhead).
+</div>
+
+<figure>
+<svg viewBox="0 0 1080 320" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Prefill throughput vs context: arena baseline vs in-process VMM">
+  <text x="540" y="22" class="title" text-anchor="middle">Prefill t/s vs ctx tokens &mdash; arena baseline vs in-process VMM, post-merge</text>
+  <!-- Y axis 0..2500, X axis 2048..32768 -->
+  <g class="axis">
+    <line x1="80" y1="50" x2="80" y2="280"/>
+    <line x1="80" y1="280" x2="1040" y2="280"/>
+    <text x="72" y="284" text-anchor="end">0</text>
+    <text x="72" y="234" text-anchor="end">500</text>
+    <text x="72" y="188" text-anchor="end">1000</text>
+    <text x="72" y="142" text-anchor="end">1500</text>
+    <text x="72" y="96" text-anchor="end">2000</text>
+    <text x="72" y="55" text-anchor="end">2500</text>
+  </g>
+  <g class="grid">
+    <line x1="80" y1="234" x2="1040" y2="234"/>
+    <line x1="80" y1="188" x2="1040" y2="188"/>
+    <line x1="80" y1="142" x2="1040" y2="142"/>
+    <line x1="80" y1="96" x2="1040" y2="96"/>
+    <line x1="80" y1="55" x2="1040" y2="55"/>
+  </g>
+  <!-- x ticks at 2048,8192,16384,24576,32768; map x = 80 + ((ctx-2048)/30720)*960 -->
+  <g class="axis">
+    <text x="80" y="298" text-anchor="middle">2048</text>
+    <text x="271" y="298" text-anchor="middle">8192</text>
+    <text x="461" y="298" text-anchor="middle">16384</text>
+    <text x="752" y="298" text-anchor="middle">24576</text>
+    <text x="1040" y="298" text-anchor="middle">32768</text>
+  </g>
+  <!-- PRO 6000 arena polyline. Points: (2048,1078.86),(4096,1050.55),(6144,1040.39),(8192,1034.46),(10240,1027.69),(12288,1020.35),(14336,1013.20),(16384,1009.52),(18432,1002.69),(20480,998.76),(22528,994.15),(24576,988.94),(26624,983.12),(28672,977.50),(30720,972.97),(32768,966.93). y = 280 - tps/2500*230 -->
+  <polyline class="line arena" points="80,180.74 144,183.34 207,184.28 271,184.83 334,185.45 398,186.13 461,186.79 525,187.13 589,187.76 652,188.12 716,188.54 779,189.02 843,189.55 907,190.07 970,190.49 1040,191.04"/>
+  <!-- PRO 6000 VMM polyline. Points: (2048,2193.29),(4096,2093.19),(6144,2053.35),(8192,2030.33),(10240,2004.42),(12288,1981.41),(14336,1952.98),(16384,1947.70),(18432,1928.17),(20480,1909.09),(22528,1893.80),(24576,1874.49),(26624,1854.30),(28672,1835.64),(30720,1820.44),(32768,1806.14). y = 280 - tps/2500*230 -->
+  <polyline class="line vmm" points="80,78.22 144,87.43 207,91.10 271,93.21 334,95.59 398,97.71 461,100.33 525,100.81 589,102.61 652,104.36 716,105.77 779,107.55 843,109.41 907,111.13 970,112.52 1040,113.84"/>
+  <!-- GB10 arena polyline. Points: (2048,461.24),(4096,417.15),(6144,409.51),(8192,403.55),(10240,399.23),(12288,396.27),(14336,391.65),(16384,388.35). y = 280 - tps/2500*230 -->
+  <polyline class="line gb10" points="80,237.57 144,241.62 207,242.33 271,242.88 334,243.27 398,243.54 461,243.97 525,244.27" stroke-dasharray="2 3"/>
+  <!-- legend -->
+  <g>
+    <rect x="700" y="50" width="14" height="3" fill="#7a8497"/>
+    <text x="720" y="55" class="label">PRO 6000 arena (legacy cudaMalloc 4 KiB pages)</text>
+    <rect x="700" y="70" width="14" height="3" fill="#7ee0c1"/>
+    <text x="720" y="75" class="label">PRO 6000 in-process VMM (2 MiB pages, new default)</text>
+    <rect x="700" y="90" width="14" height="3" fill="#88b8ff"/>
+    <text x="720" y="95" class="label">GB10 arena/VMM (overlap &mdash; no delta on integrated)</text>
+  </g>
+</svg>
+<figcaption>Source: <code>local/docs/ds4_vmm_landing_merged/{pod,gb10}_{arena,vmm}.csv</code> (post-merge). PRO 6000 holds 2.04&times; at ctx=2048 and 1.87&times; at ctx=32768. GB10 lines overlap because the integrated LPDDR5X path already operates near the page-table-insensitive limit.</figcaption>
+</figure>
+
+<h4>Why GB10 is neutral and that's fine</h4>
+<p>
+On the integrated Spark, weights live in the same LPDDR5X pool as everything else. The driver page-table layout for cudaMalloc is already 2 MiB-aligned there, so VMM yields no measurable delta (&minus;0.16% mean across the sweep, no row worse than &minus;0.75%). The earlier worry that integrated GPUs would OOM under VMM was wrong &mdash; the weight server has run on GB10 with <code>--reserve-gb 24</code> for weeks; in-process VMM has the same memory profile.
+</p>
+
+<h3 id="t-ws">3.3 CUDA weight server sidecar</h3>
+<p>
+<span class="tag">12 commits</span><span class="tag">1,802 LOC <code>tools/ds4_weight_server.cu</code></span><span class="tag acc2">2 backends (VMM, IPC)</span>
+</p>
+
+<p>
+A standalone CUDA process that owns the weight allocations and exposes them to one or more <code>ds4</code> workers through a manifest file. Two transports:
+</p>
+<ul>
+  <li><strong>VMM backend</strong> (post-2026-05-16 default): allocates with <code>cuMemCreate(CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR)</code>, transfers FDs to workers through a Unix-domain socket broker (<code>SCM_RIGHTS</code>). Workers reconstitute device-mappable ranges via <code>cuMemImportFromShareableHandle</code>.</li>
+  <li><strong>IPC backend</strong> (legacy): exports CUDA IPC handles via the manifest. Kept for fallback.</li>
+</ul>
+
+<h4>Operating envelope</h4>
+<ul>
+  <li><code>--scope base|mtp|both</code> &mdash; choose which weight set to upload. <code>base</code> for non-MTP work saves ~3 GiB.</li>
+  <li><code>--reserve-gb N</code> &mdash; leaves headroom for context buffers and transient allocs. Validated: PRO 6000 (96 GiB) needs 8, fails at 12. GB10 (128 GiB) uses 24.</li>
+  <li><code>--dry-run</code> &mdash; sizes the run and emits a preflight verdict without allocating, so the proof harness can refuse a run that won't fit.</li>
+  <li><code>--exit-on-parent-pid</code> &mdash; auto-exit if the launcher disappears. Combined with a lock file (<code>/tmp/ds4_weight_server_cuda*.lock</code>) this makes the sidecar safe under harness crashes.</li>
+  <li>Direct I/O on the upload path (commit <code>e7f7ce1</code>) bypasses the page cache when loading the GGUF, halving import time on cold runs.</li>
+</ul>
+
+<h4>When to use which (operator decision tree)</h4>
+<table>
+  <thead><tr><th>Workload</th><th>Recommended path</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr><td>One-shot <code>./ds4 -p ...</code>, single <code>ds4-bench</code>, single <code>ds4-server</code></td><td class="good">In-process VMM arena (auto)</td><td>Same 2 MiB-page layout, zero setup tax.</td></tr>
+    <tr><td>Proof harness running N profiles in parallel</td><td class="good">Weight server, scope=base</td><td>~67 s base upload amortised over N workers.</td></tr>
+    <tr><td>MTP correctness work (base + MTP gguf concurrent)</td><td class="good">Weight server, scope=both</td><td>Single-allocation fragmentation can OOM even with sufficient free VRAM.</td></tr>
+    <tr><td>Multi-profile bench sweeps</td><td class="good">Weight server, scope=base</td><td>Same as proof harness.</td></tr>
+  </tbody>
+</table>
+
+<h3 id="t-proof">3.4 Generalized engine proof harness</h3>
+<p>
+<span class="tag">27 commits</span><span class="tag">1,860 LOC <code>tests/ds4_proof.py</code></span><span class="tag acc2">5-tuple data model</span>
+</p>
+
+<p>
+A proof run is modeled as <code>profile &times; suite &times; prompt &times; budget &times; contract</code>:
+</p>
+<ul>
+  <li><strong>profile</strong> &mdash; backend, model paths, MTP use, env flags, extra args, baseline flag.</li>
+  <li><strong>suite</strong> &mdash; what is under proof. Implemented: <code>argmax_generation</code>, <code>mtp_speculative</code>.</li>
+  <li><strong>prompt</strong> &mdash; input fixture (built-in set, file, or plan-file).</li>
+  <li><strong>budget</strong> &mdash; named tier (smoke / candidate / default-on / nightly), each with token count and built-in prompt count.</li>
+  <li><strong>contract</strong> &mdash; the pass/fail rule. Implemented: exact generated bytes; opt-in: certified-row0 logits.</li>
+</ul>
+
+<h4>Lifecycle ownership</h4>
+<p>
+<code>--start-weight-server</code> hands the sidecar's lifecycle to the runner. The runner:
+</p>
+<ol>
+  <li>Runs <code>--dry-run</code> preflight; refuses to start if it won't fit.</li>
+  <li>Launches the server with <code>--exit-on-parent-pid</code>.</li>
+  <li>Polls the manifest for readiness; only sets <code>DS4_CUDA_WEIGHT_IPC_MANIFEST</code> in worker env after ready.</li>
+  <li>On profile failure, still tears the server down. If the server dies mid-run, the whole proof fails.</li>
+</ol>
+
+<h4>Verdict surface</h4>
+<p>
+The JSON report carries a top-level <code>weight_server_validation</code> verdict that automation can gate on. It checks ready state, backend, scope, preflight result, upload telemetry for the requested model scope, parent-PID guard, lock acquisition, shutdown observation, and clean termination. VMM runs additionally check support telemetry, plans, broker startup, and broker request activity. <code>weight_server</code> carries the raw command, manifest path, log path, dry-run preflight, startup time, and cleanup result.
+</p>
+
+<h4>MTP-specific reporting</h4>
+<p>
+<code>23cd345</code> promoted MTP acceptance to a first-class metric so optimisation runs can read it directly from the report instead of grepping logs. <code>59cd8d2</code> exposes derived weight artifacts (prebuilt Q8 expansion tables, etc.) so the harness can re-run with the same artifacts the WS owner produced.
+</p>
+
+<h3 id="t-mtp">3.5 MTP exact verifier path &mdash; experimental enablement</h3>
+<p>
+<span class="tag">35+ commits</span><span class="tag">+~3 k LOC <code>ds4.c</code></span><span class="tag neut">CUDA MTP enabled end-to-end</span><span class="tag warn">opt-in: throughput neutral-to-negative</span>
+</p>
+
+<p>
+<strong>The deliverable here is enablement, not a perf win.</strong> Prior to this work the CUDA backend had no exact speculative-decoding path; this branch lands the full pipeline &mdash; top-2 draft, paired Q/KV projections, fused MoE down-sum, exact 2-token verifier with state-barrier rollback, certified row-0 logits, acceptance-history gating, and session-snapshot persistence of the accept-gate state &mdash; behind opt-in env flags. The throughput case is currently neutral to slightly negative vs no-MTP on the workloads we measured, so MTP is shipped as experimental and is not part of the recommended fast baseline.
+</p>
+
+<p>
+The fork's MTP work targets exact (bit-identical to no-MTP) speculative decoding on CUDA, building toward a 2-token verifier. The headline path:
+</p>
+
+<ol>
+  <li><strong>Top-2 draft</strong> (<code>DS4_CUDA_MTP_TOP2=1</code>) &mdash; CUDA top-2 output for draft decisions.</li>
+  <li><strong>Verify top-2/top-1</strong> (<code>DS4_CUDA_MTP_VERIFY_TOP2=1</code>) &mdash; verifier shortcut when full logits are not needed.</li>
+  <li><strong>Pair-batched Q projections</strong> (<code>3cad23c</code>) &mdash; two-token Q/KV projections batched into one kernel.</li>
+  <li><strong>Fused MoE down-sum</strong> (<code>6b9fe82</code>) &mdash; verifier accumulates two-token MoE down in a single pass.</li>
+  <li><strong>Exact pair output projection verifier</strong> (<code>4b8518b</code>, <code>f6051da</code>) &mdash; default-on for CUDA after parity tests.</li>
+  <li><strong>Certified row-0 logits</strong> (<code>614b5a8</code>, opt-in via <code>DS4_MTP_CERT_LOGITS=1</code>) &mdash; proves drafted row1 token is row0 argmax before skipping the row0 top-2 scan; uncertified rows fall back to exact top-2.</li>
+  <li><strong>State-barrier verifier transaction</strong> (<code>68166ad</code>) &mdash; the verifier appears atomic from the rest of the engine; rejected speculations cleanly roll back KV state.</li>
+  <li><strong>Acceptance-history gating</strong> (<code>f72ba58</code>, <code>d71ee5e</code>, <code>aad1401</code>) &mdash; exact speculation only kicks in once recent acceptance exceeds a threshold, so cold prompts don't pay the speculation tax.</li>
+  <li><strong>Session-snapshot persistence</strong> (<code>6a86411</code>) &mdash; accept-gate state survives <code>--save-cache</code> / <code>--load-cache</code>.</li>
+  <li><strong>Decode2 layer entrypoint + batched routed MoE FFN</strong> (<code>a5af40d</code>, <code>af5cd0a</code>, <code>0b99bea</code>, <code>a1f4723</code>, <code>7a20ab7</code>, <code>454f539</code>, <code>ce61a50</code>) &mdash; the exact verifier replays a full decoder layer for the pair, with in-place HC/prefix-row writes and routed MoE batched inside.</li>
+</ol>
+
+<div class="callout warn">
+<strong>Why experimental, not default-on:</strong> on GB10 at <code>--mtp-draft 2</code> over a full-context sweep, exact MTP is effectively tied with no-MTP (342&nbsp;t/s prefill, 12.6&nbsp;t/s gen mean), and it pays a ~3.7 s setup tax at gen=128 that the current generation lengths don't amortise. The plumbing is exact and the harness can prove it; the wash is structural &mdash; higher draft depths, lower verifier scheduling overhead, or longer generations are the levers to break it. Until that happens the showcase config in benchmarks stays <em>best-nomtp</em> and MTP is reached only by setting <code>DS4_CUDA_MTP_TOP2=1</code> + <code>DS4_CUDA_MTP_VERIFY_TOP2=1</code> + <code>--mtp</code>.
+</div>
+
+<h3 id="t-correctness">3.6 Correctness gates</h3>
+<p>
+Three structural decisions defend the fork against silent regressions:
+</p>
+
+<h4>(a) Option D &mdash; legacy kernels inside the MTP verifier</h4>
+<p>
+<code>DS4_CUDA_MTP_VERIFIER_USE_MMQ</code> default unset / 0. The CUDA backend honors <code>ds4_gpu_set_mtp_verifier(1)</code> bracketing by routing all Q8_0 dense matmuls (and routed-MoE dispatch via the same gate) onto the legacy <code>warp8</code> kernels for the duration of one verifier call. Necessary because mmq's stream-k + MMA FP32 reduction order drifts ~1 ULP/layer from warp8; the drafter is trained against legacy-style decoding, so an mmq verifier flips tight-margin argmax tokens and collapses draft acceptance (analyst measured 0/314 on GB10 with mmq verifier active). Setting the env var to <code>1</code> reproduces the broken behavior for bisection.
+</p>
+
+<h4>(b) Dispatcher with explicit downgrade chain</h4>
+<p>
+On init failure, mmq downgrades to cublas, cublas downgrades to warp8. Strategy logged once on first dispatch with arch and bandwidth, e.g.
+</p>
+<pre>ds4: CUDA Q8_0 dispatch: mmq (sm_120, 1792 GB/s memory bandwidth) [default]</pre>
+<p>
+<code>DS4_CUDA_PREFILL_PATH=mmq|cublas|warp8|auto</code> is the modern knob; the legacy <code>DS4_CUDA_USE_MMQ=0</code> still works and resolves to <code>cublas</code>. <code>DS4_CUDA_PREFILL_PATH</code> takes precedence if both are set.
+</p>
+
+<h4>(c) The upstream-merge caveat</h4>
+<p>
+The merge brought a Flash graph correctness fix that added a <code>clamp</code> parameter to <code>ds4_gpu_shared_gate_up_swiglu_q8_0_tensor</code>. The merge analysis claimed "no manual fix required" &mdash; wrong: two <em>local</em> callers in <code>ds4.c</code> (lines 10233 and 10425) also needed the new parameter. Compile error caught it. Commit <code>8294755</code> patched both call sites with <code>DS4_SWIGLU_CLAMP_EXP</code>. Lesson recorded for future merges: when an upstream API gains a parameter, <code>grep -rn</code> the symbol across the whole tree, not just count what upstream touched.
+</p>
+
+<h3 id="t-bench">3.7 Bench, observability, server</h3>
+<p>
+<span class="tag">8 commits</span><span class="tag">358 LOC across bench/CLI/server</span>
+</p>
+
+<h4>ds4-bench</h4>
+<ul>
+  <li>Frontier-by-frontier prefill measurement with <code>--ctx-start</code> / <code>--ctx-max</code> / <code>--step-incr</code> and snapshot save/restore so each step starts from a hot KV.</li>
+  <li><code>--gen-tokens N</code> reports both total <code>gen_tps</code> and steady-state <code>gen_tps_ss</code> (commit <code>f4ca519</code>) &mdash; the steady-state column removes the first-token amortisation that distorted comparisons at short generations.</li>
+  <li>MTP-vs-no-MTP comparison mode (<code>d202148</code>) and the speed-bench CSVs + plot tool (<code>plot_mtp_compare.py</code>).</li>
+</ul>
+
+<h4>CLI</h4>
+<ul>
+  <li>Session-path no-MTP timing baselines (<code>d4ab17f</code>) so MTP development always has a same-prompt no-MTP control.</li>
+  <li><code>ds4-server</code> gained a working-directory option for log isolation under parallel proof runs.</li>
+</ul>
+
+<h4>Server / SSE</h4>
+<ul>
+  <li><code>return_token_ids</code> on chat completions emits <code>token_ids</code> in SSE deltas (<code>b79c2d7</code>); placed at choice level to match vLLM / llama-benchy (<code>4698319</code>); SSE emission snaps to token boundary so partial UTF-8 doesn't desynchronise (<code>904a0c4</code>).</li>
+  <li>COMPSEC eval cases (refining tool-call handling inside thinking).</li>
+  <li>Default sampling moved to min-p filtering for non-greedy runs.</li>
+</ul>
+
+<h3 id="t-docs">3.8 Documentation &amp; vendor pin</h3>
+<p>
+<span class="tag">42 commits touch docs</span><span class="tag">~1 k LOC across 5 docs</span>
+</p>
+
+<ul>
+  <li><strong><code>AGENT.md</code></strong> (286 lines) &mdash; agent operating guide. Covers the Q8_0 dispatch table, env-var inventory, weight-server vs in-process VMM decision tree, MTP verifier gate, and safety rules.</li>
+  <li><strong><code>docs/cuda-mtp/README.md</code></strong> &mdash; operator guide for CUDA MTP on GB10/Spark with reproducible bench commands.</li>
+  <li><strong><code>docs/proof-harness/README.md</code></strong> &mdash; how to run <code>tests/ds4_proof.py</code>, named budgets, weight-server scoping.</li>
+  <li><strong><code>cuda/mmq/VENDOR.md</code></strong> &mdash; upstream pin (<code>5c0e9468</code>, llama.cpp), file inventory (verbatim vs patched), symbol-resolution table, re-sync procedure.</li>
+  <li><strong><code>speed-bench/mtp-compare-2026-05-14/README.md</code></strong> &mdash; reproducible bench commands + summary table.</li>
+</ul>
+
+<h2 id="results">4. Performance results</h2>
+
+<h4>4.1 Headline prefill at ctx=2048 (V4 Flash IQ2XXS-w2Q2K-AProjQ8-SExpQ8-OutQ8)</h4>
+<table>
+  <thead>
+    <tr><th>Arch</th><th>Upstream baseline<br>(cublas + cudaMalloc)</th><th>Fork &mdash; mmq + arena<br>(prior default)</th><th>Fork &mdash; mmq + in-process VMM<br>(current default)</th><th>Total speedup</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>PRO 6000 Blackwell sm_120</td>
+      <td class="neutral">~373 t/s</td>
+      <td>1078.86 t/s</td>
+      <td class="good">2193.29 t/s</td>
+      <td class="good">5.88&times;</td>
+    </tr>
+    <tr>
+      <td>GB10 Spark sm_121</td>
+      <td class="neutral">~401 t/s</td>
+      <td>461.24 t/s</td>
+      <td class="good">460.49 t/s</td>
+      <td class="good">1.15&times;</td>
+    </tr>
+  </tbody>
+</table>
+<p class="meta">
+PRO 6000 numbers from <code>local/docs/ds4_vmm_landing_merged/pod_{arena,vmm}.csv</code>; GB10 from the matching <code>gb10_{arena,vmm}.csv</code>. Upstream baseline figures from the <code>AGENT.md</code> dispatch table. Each fork column reports a single ctx=2048 frontier; the full sweeps show the VMM gain holds (1.87&times; arena&rarr;VMM at ctx=32768 on PRO 6000) and GB10 is flat across the sweep (the &times;1.15 there is purely the mmq dispatcher, not page layout).
+</p>
+
+<h4>4.2 Gen throughput is preserved end-to-end</h4>
+<table>
+  <thead><tr><th>Arch</th><th>gen_tps_ss arena</th><th>gen_tps_ss VMM</th><th>&Delta;</th></tr></thead>
+  <tbody>
+    <tr><td>PRO 6000 (ctx=2048, gen=128)</td><td>43.21</td><td class="good">43.44</td><td class="good">+0.5%</td></tr>
+    <tr><td>PRO 6000 (ctx=32768, gen=128)</td><td>37.77</td><td>38.05</td><td>+0.7%</td></tr>
+    <tr><td>GB10 (ctx=2048, gen=64)</td><td>14.11</td><td>14.12</td><td>+0.1%</td></tr>
+    <tr><td>GB10 (ctx=16384, gen=64)</td><td>13.52</td><td>13.49</td><td>&minus;0.2%</td></tr>
+  </tbody>
+</table>
+<p class="meta">Decode is bandwidth-bound, not page-table-bound, so VMM is neutral on gen. No regression observed.</p>
+
+<h4>4.3 MTP exact verifier &mdash; GB10 full-context sweep (experimental opt-in)</h4>
+<table>
+  <thead><tr><th>Run</th><th>Prefill mean</th><th>Gen mean</th><th>Gen first frontier</th><th>Gen last frontier (38912)</th></tr></thead>
+  <tbody>
+    <tr><td>no-MTP (showcase baseline)</td><td>342.20 t/s</td><td>12.68 t/s</td><td>14.00 t/s</td><td>11.63 t/s</td></tr>
+    <tr><td>exact MTP, draft=2 <span class="tag neut">experimental</span></td><td>341.02 t/s</td><td>12.62 t/s</td><td>12.53 t/s</td><td>11.68 t/s</td></tr>
+  </tbody>
+</table>
+<p class="meta">Source: <code>speed-bench/mtp-compare-2026-05-14/{gb10_nomtp,gb10_exact_mtp}.csv</code>. The point of these numbers is to validate that the new CUDA MTP path runs end-to-end and stays exact; throughput is currently neutral-to-negative (behind on the cold frontier from setup tax, marginally ahead at the largest contexts). Ships opt-in until a configuration breaks the wash in MTP's favor.</p>
+
+<h2 id="api">5. Public surface, env vars, and back-compat</h2>
+
+<h4>New env-var surface</h4>
+<table>
+  <thead><tr><th>Variable</th><th>Default</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td><code>DS4_CUDA_PREFILL_PATH</code></td><td><code>auto</code> &rarr; mmq</td><td>Q8_0 dispatch: mmq / cublas / warp8 / auto. Explicit override.</td></tr>
+    <tr><td><code>DS4_CUDA_USE_MMQ</code></td><td>unset</td><td>Legacy alias: <code>0</code> = cublas. Lower precedence than <code>DS4_CUDA_PREFILL_PATH</code>.</td></tr>
+    <tr><td><code>DS4_CUDA_MMQ_MOE_MIN_TOKENS</code></td><td>2</td><td>Minimum n_tokens at which routed-MoE uses mmq matrix-shaped path.</td></tr>
+    <tr><td><code>DS4_CUDA_MMQ_X_MAX</code></td><td>unset (128)</td><td>Diagnostic: clip <code>get_mmq_x_max_host</code> to N.</td></tr>
+    <tr><td><code>DS4_CUDA_NO_MMVQ_DECODE</code></td><td>unset</td><td>Opt-out of mmvq for n_tok=1 decode (routed-MoE and dense Q8_0).</td></tr>
+    <tr><td><code>DS4_CUDA_MMVQ_DECODE_MAX_TOKENS</code></td><td>1</td><td>Cap on n_tokens routed through mmvq decode branch (0&ndash;8).</td></tr>
+    <tr><td><code>DS4_CUDA_MOE_GRAPHS</code></td><td><span class="tag warn">OFF</span></td><td>CUDA Graph capture/replay; opt-in pending root-cause of GB10 corruption.</td></tr>
+    <tr><td><code>DS4_CUDA_MTP_VERIFIER_USE_MMQ</code></td><td>unset / 0</td><td>Bisection switch: <code>1</code> reproduces the broken mmq-in-verifier behavior.</td></tr>
+    <tr><td><code>DS4_CUDA_VMM_ARENA</code></td><td>enabled</td><td><code>0</code> disables in-process VMM allocator (escape hatch).</td></tr>
+    <tr><td><code>DS4_CUDA_VMM_ARENA_CHUNK_MB</code></td><td>0 (request-size)</td><td>Force a minimum chunk size per cuMemCreate; rarely needed.</td></tr>
+    <tr><td><code>DS4_CUDA_WEIGHT_IPC_MANIFEST</code></td><td>unset</td><td>Worker-side: import weights from the manifest path. Hard-gates in-process VMM off.</td></tr>
+    <tr><td><code>DS4_CUDA_MTP_TOP2</code> / <code>DS4_CUDA_MTP_VERIFY_TOP2</code></td><td>unset</td><td>Enable CUDA top-2 draft + verifier shortcut.</td></tr>
+    <tr><td><code>DS4_MTP_CERT_LOGITS</code> / <code>DS4_MTP_CERT_LOGITS_SHADOW</code></td><td>unset</td><td>Opt-in row-0 certificate / shadow validator.</td></tr>
+    <tr><td><code>DS4_MTP_STRICT</code> (= <code>--quality</code>)</td><td>unset</td><td>Force byte-identical target stream behavior.</td></tr>
+  </tbody>
+</table>
+
+<h4>Public C API additions (<code>ds4_gpu.h</code>)</h4>
+<ul>
+  <li><code>ds4_gpu_tensor_alloc_managed</code> &mdash; managed-memory tensor for KV in the unified-memory path.</li>
+  <li><code>ds4_gpu_top2_result</code>, <code>ds4_gpu_candidate_cert_result</code> &mdash; structured returns for MTP top-2 and certificate verifier.</li>
+  <li><code>ds4_gpu_set_model_map_range</code>, <code>ds4_gpu_import_model_ipc_manifest</code>, <code>ds4_gpu_set_model_fd</code>, <code>ds4_gpu_cache_model_range</code>, <code>ds4_gpu_cache_q8_f16_range</code> &mdash; weight-server import surface.</li>
+  <li><code>ds4_gpu_should_use_managed_kv_cache</code> &mdash; KV-cache placement policy hook.</li>
+</ul>
+
+<h4>Back-compat posture</h4>
+<ul>
+  <li>No deletions of upstream public symbols.</li>
+  <li>Every behavior change is reachable from an env var with the prior default available as the override.</li>
+  <li>The Metal path has matching API stubs (<code>ds4_metal.m</code> added 333 lines, mostly to satisfy the GPU API surface).</li>
+  <li>The legacy Q8&rarr;FP16 expansion + cublas path was deleted once (commit <code>1bbacf6</code>) then restored (<code>961e57a</code>) so cublas remains a working fallback. The dispatcher selects it on mmq init failure and the bench harness can opt into it for A/B.</li>
+</ul>
+
+<h2 id="arch">6. Architectural impact diagram</h2>
+
+<figure>
+<svg viewBox="0 0 1080 460" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Dataflow before and after the fork's CUDA backend work">
+  <text x="540" y="22" class="title" text-anchor="middle">CUDA backend dataflow &mdash; upstream vs fork</text>
+
+  <!-- LEFT: upstream -->
+  <g>
+    <text x="180" y="48" class="title" text-anchor="middle">upstream antirez/ds4</text>
+    <!-- mmap -->
+    <rect x="60" y="60" width="240" height="36" fill="#222631" stroke="#2c323d"/>
+    <text x="180" y="83" class="label" text-anchor="middle">mmap'd GGUF (host pages)</text>
+    <!-- arrow -->
+    <line x1="180" y1="96" x2="180" y2="112" stroke="#5a6376" marker-end="url(#a1)"/>
+    <!-- cudaMalloc arena -->
+    <rect x="60" y="112" width="240" height="36" fill="#222631" stroke="#2c323d"/>
+    <text x="180" y="135" class="label" text-anchor="middle">cudaMalloc arena (4 KiB pages)</text>
+    <line x1="180" y1="148" x2="180" y2="164" stroke="#5a6376" marker-end="url(#a1)"/>
+    <!-- Q8->FP16 expansion -->
+    <rect x="60" y="164" width="240" height="36" fill="#222631" stroke="#2c323d"/>
+    <text x="180" y="187" class="label" text-anchor="middle">Q8&rarr;FP16 expansion cache</text>
+    <line x1="180" y1="200" x2="180" y2="216" stroke="#5a6376" marker-end="url(#a1)"/>
+    <!-- cublasGemmEx -->
+    <rect x="60" y="216" width="240" height="36" fill="#222631" stroke="#2c323d"/>
+    <text x="180" y="239" class="label" text-anchor="middle">cublasGemmEx (FP16)</text>
+    <!-- result -->
+    <rect x="60" y="280" width="240" height="44" fill="#181c24" stroke="#5a6376"/>
+    <text x="180" y="300" class="label" text-anchor="middle">PRO 6000 ctx=2048:</text>
+    <text x="180" y="316" class="label" text-anchor="middle" fill="#ff7c8c">373 prefill t/s</text>
+    <text x="180" y="345" class="small" text-anchor="middle">page-table heavy on 80 GiB weights</text>
+  </g>
+
+  <!-- DIVIDER -->
+  <line x1="380" y1="40" x2="380" y2="430" stroke="#2c323d" stroke-dasharray="4 4"/>
+
+  <!-- RIGHT: fork -->
+  <g>
+    <text x="730" y="48" class="title" text-anchor="middle">fork (PR-prep)</text>
+    <!-- mmap -->
+    <rect x="460" y="60" width="540" height="36" fill="#222631" stroke="#2c323d"/>
+    <text x="730" y="83" class="label" text-anchor="middle">mmap'd GGUF (host pages, direct I/O on upload)</text>
+    <line x1="730" y1="96" x2="730" y2="112" stroke="#7ee0c1" marker-end="url(#a2)"/>
+    <!-- VMM arena box -->
+    <rect x="460" y="112" width="540" height="60" fill="#181c24" stroke="#7ee0c1"/>
+    <text x="730" y="132" class="label" text-anchor="middle">In-process VMM arena (cuMemCreate, 2 MiB pages)</text>
+    <text x="730" y="150" class="small" text-anchor="middle">or, when DS4_CUDA_WEIGHT_IPC_MANIFEST set:</text>
+    <text x="730" y="164" class="small" text-anchor="middle" fill="#88b8ff">imports VMM ranges from ds4_weight_server via Unix-socket broker</text>
+    <line x1="730" y1="172" x2="730" y2="186" stroke="#7ee0c1" marker-end="url(#a2)"/>
+    <!-- dispatcher -->
+    <rect x="460" y="186" width="540" height="64" fill="#181c24" stroke="#7ee0c1"/>
+    <text x="730" y="206" class="label" text-anchor="middle">DS4_CUDA_PREFILL_PATH dispatcher (auto&rarr;mmq)</text>
+    <text x="540" y="226" class="small" text-anchor="middle">mmq</text>
+    <text x="540" y="240" class="small" text-anchor="middle" fill="#7ee0c1">(default)</text>
+    <text x="680" y="226" class="small" text-anchor="middle">cublas</text>
+    <text x="680" y="240" class="small" text-anchor="middle">(fallback)</text>
+    <text x="820" y="226" class="small" text-anchor="middle">warp8</text>
+    <text x="820" y="240" class="small" text-anchor="middle">(MTP verifier &mdash; Option D)</text>
+    <text x="950" y="226" class="small" text-anchor="middle">mmvq</text>
+    <text x="950" y="240" class="small" text-anchor="middle">(n_tok=1 decode)</text>
+    <!-- result -->
+    <rect x="460" y="280" width="540" height="44" fill="#181c24" stroke="#7ee0c1"/>
+    <text x="730" y="300" class="label" text-anchor="middle">PRO 6000 ctx=2048:</text>
+    <text x="730" y="316" class="label" text-anchor="middle" fill="#7ee0c1">2193 prefill t/s &mdash; 5.88&times; upstream</text>
+    <text x="730" y="345" class="small" text-anchor="middle">single-process reaches WS ceiling within 0.07%, zero setup tax</text>
+
+    <!-- proof harness halo -->
+    <rect x="460" y="370" width="540" height="48" fill="#181c24" stroke="#88b8ff" stroke-dasharray="4 3"/>
+    <text x="730" y="390" class="label" text-anchor="middle">tests/ds4_proof.py (profile &times; suite &times; prompt &times; budget &times; contract)</text>
+    <text x="730" y="406" class="small" text-anchor="middle">owns weight-server lifecycle, emits pass/fail verdict, gates default-on flips</text>
+  </g>
+
+  <defs>
+    <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#5a6376"/>
+    </marker>
+    <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7ee0c1"/>
+    </marker>
+  </defs>
+</svg>
+<figcaption>The fork separates three concerns: (a) where weights live in device memory (VMM in-process; sidecar across processes), (b) which kernel executes the matmul (dispatcher + mmq/mmvq/cublas/warp8), (c) how regressions are caught (proof harness with pass/fail verdict).</figcaption>
+</figure>
+
+<h2 id="risk">7. Risks, known issues, gaps</h2>
+
+<div class="callout warn">
+<strong>R1 &mdash; <code>DS4_CUDA_MOE_GRAPHS</code> default OFF, root-cause pending.</strong> External proof-harness validation on GB10 observed gross corruption on a 32-token smoke with graphs ON that disappears with graphs OFF. The fix that flipped graphs ON validated only 10/10 bit-identical greedy decode against the same branch's graphs-OFF baseline &mdash; self-determinism, not exact-byte equivalence vs the legacy path. The dense Q8_0 graph cache + the mmq cudaMallocAsync pool stream binding are the prime suspects (likely an undeclared cross-stream dependency in the captured region). Tracked in commit <code>b66b5d6</code>.
+</div>
+
+<div class="callout warn">
+<strong>R2 &mdash; MTP ships experimental, not as a perf win.</strong> The CUDA MTP path is enabled end-to-end and proves exact, but its throughput is currently neutral-to-negative vs no-MTP on the workloads we measured (GB10 draft=2 sweep: 12.62 vs 12.68 t/s gen, &minus;0.5%; cold frontier 1.5 t/s behind from the ~3.7 s setup tax at gen=128). It is reached only via opt-in flags and is excluded from the showcase config. Path to a default-on case: deeper draft acceptance (draft=3+), lower verifier scheduling overhead, or generation regimes where the setup tax amortises. The exact verifier and proof harness remain useful as a correctness floor regardless.
+</div>
+
+<div class="callout">
+<strong>R3 &mdash; Vendored kernels carry a re-sync obligation.</strong> 15.8 k LOC are pinned to llama.cpp <code>5c0e9468</code> (2026-05-14). The two upstream files we patched (<code>mmvq.{cu,cuh}</code>) need rebasing on re-sync. <code>cuda/mmq/VENDOR.md</code> documents the procedure but the cost is real; we should plan re-syncs at most quarterly unless an upstream fix is load-bearing.
+</div>
+
+<div class="callout">
+<strong>R4 &mdash; Two-instance OOM hazard on unified-memory boxes.</strong> The weight server allocates VMM on the same LPDDR5X pool the rest of the system uses. Starting a second large DS4 process while the WS is resident can OOM &mdash; AGENT.md warns about this but it's still a foot-gun. Mitigated by the instance lock and parent-PID exit guard, but worth callout in PR notes.
+</div>
+
+<div class="callout">
+<strong>R5 &mdash; <code>warp8</code> dispatch is degenerate on GB10.</strong> The fallback runs at 56 t/s on GB10 (vs 458 t/s mmq). It's the right correctness baseline for the MTP verifier (Option D) but anyone manually selecting warp8 outside the verifier on Spark will be very surprised. The dispatcher logs the choice once, which helps, but the env-var docs should flag this more loudly.
+</div>
+
+<h4>Gaps acknowledged</h4>
+<ul>
+  <li>No CI for the proof harness yet &mdash; runs are manual.</li>
+  <li>The fused <code>moe_pair_vec</code> entry exists but isn't wired (applies silu without clamp; the V4 Flash clamp epilogue requires the two-call form).</li>
+  <li>Q4_K dense + MoE went through mmq, but a parity sweep at the same depth as Q8_0 hasn't been published.</li>
+  <li>The post-merge validation set used the recent CSVs but did not re-run the proof-harness greedy-decode determinism check end-to-end on the merged tree. Worth doing before the PR opens.</li>
+</ul>
+
+<h2 id="pr">8. Path to upstreaming</h2>
+
+<p>The work is too large for one PR. A natural split:</p>
+
+<table>
+  <thead><tr><th>#</th><th>PR title</th><th>Scope</th><th>Risk</th><th>Reviewer ask</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>cuda: vendor llama.cpp mmq + adapter + parity tests</td><td><code>cuda/mmq/</code> + Makefile + <code>cuda/mmq/VENDOR.md</code></td><td class="neutral">low (additive, default off behind <code>DS4_CUDA_USE_MMQ=1</code> on the first PR if desired)</td><td>license + vendor-pin policy</td></tr>
+    <tr><td>2</td><td>cuda: route Q8_0 / Q4_K / IQ2_XXS / Q2_K dispatch through mmq</td><td>dispatcher in <code>ds4_cuda.cu</code> + env vars + AGENT.md table</td><td class="warn">medium (perf shift)</td><td>bench reproducibility on at least sm_120 + one other arch</td></tr>
+    <tr><td>3</td><td>cuda: in-process VMM weight arena</td><td>5 commits, <code>ds4_cuda.cu</code> + AGENT.md</td><td class="neutral">low (gated, falls back to legacy on probe failure)</td><td>portability across CUDA versions</td></tr>
+    <tr><td>4</td><td>tools: ds4_weight_server + broker + import API</td><td><code>tools/ds4_weight_server.cu</code>, <code>ds4_gpu.h</code>, AGENT.md</td><td class="warn">medium (new binary, FD-over-socket protocol)</td><td>operator UX, lock file semantics</td></tr>
+    <tr><td>5</td><td>tests: generalized engine proof harness</td><td><code>tests/ds4_proof.py</code> + docs/proof-harness</td><td class="neutral">low (test-only)</td><td>scope of <code>contract</code> + budget naming</td></tr>
+    <tr><td>6</td><td>mtp: exact verifier + acceptance-history gating + session-snapshot accept-state</td><td><code>ds4.c</code>, <code>ds4_cuda.cu</code>, docs/cuda-mtp</td><td class="warn">medium (default-on behavior change, but acceptance-gated)</td><td>strict-mode equivalence proof</td></tr>
+    <tr><td>7</td><td>cuda: Option D MTP-verifier kernel routing</td><td>tiny <code>ds4.c</code> bracketing + <code>ds4_cuda.cu</code> dispatcher hook</td><td class="neutral">low (default-on)</td><td>none beyond #6</td></tr>
+    <tr><td>8</td><td>bench/server: steady-state gen_tps + token_ids SSE + session-path no-MTP baselines</td><td><code>ds4_bench.c</code>, <code>ds4_cli.c</code>, <code>ds4_server.c</code></td><td class="neutral">low (additive)</td><td>SSE wire-format match with vLLM</td></tr>
+  </tbody>
+</table>
+
+<p class="meta">If antirez prefers a single mega-PR: #1+#2 must stay together (mmq is dead code without the dispatcher), but every other group can be sequenced.</p>
+
+<h2 id="appendix">9. Appendix &mdash; commits by theme</h2>
+
+<details><summary>9.1 mmq lift &amp; dispatcher (25 commits)</summary>
+<pre>101831c cuda: vendor llama.cpp's mmq kernel family for fused dequant matmul
+06747ea cuda: implement ds4_mmq_q8_0_dense and parity-test against CPU reference
+c7e0b8c cuda: add ds4_mmq_q2_K_dense and ds4_mmq_iq2_xxs_dense
+0bf8040 cuda: add MoE _id matmul wrappers (ds4_mmq_{q8_0,q2_K,iq2_xxs}_moe)
+39d3877 cuda: route Q8_0 dense matmuls through cuda/mmq when DS4_CUDA_USE_MMQ=1
+a56e07a cuda: route IQ2_XXS/Q2_K routed-MoE through cuda/mmq when DS4_CUDA_USE_MMQ=1
+09b38f2 cuda: gate mmq routed-MoE on n_tokens >= 2 to preserve decode throughput
+046f02e docs: AGENT.md and cuda/mmq/VENDOR.md - phase 7 lock and env-var inventory
+944482d cuda: flip DS4_CUDA_USE_MMQ to opt-out - cuda/mmq is now the default
+298022f tests: sprint 0 bench harness - variance <1% at ctx=2048 on PRO 6000
+1bbacf6 cuda: step 1 - delete legacy Q8->FP16 expansion cache and cuBLAS path
+af99da7 cuda: step 2 - wire Q4_K dense and MoE through cuda/mmq
+387e58d cuda: step 3 - paired moe API to share Q8_1 activation across gate+up
+66fa20f cuda: step 4 - mmq_x_max sweep diagnostic hook (default unchanged)
+380f9bf cuda: step 6 partial - vendor mmvq.{cu,cuh} and unary.cuh
+71ca87d cuda: step 6.a/b - vec ABI + parity-tested impls for mmvq
+4425ed0 cuda: step 6.c/d - wire mmvq decode into routed_moe and dense Q8_0
+abe2657 cuda: step 8 - CUDA Graph capture+replay for routed-MoE decode
+2200c67 cuda: step 8.2 - graphs for dense Q8_0 vec + flip default to ON
+b66b5d6 cuda: revert DS4_CUDA_MOE_GRAPHS default to OFF (R1)
+8df4b2a cuda: route MTP verifier matmuls to legacy kernels (Option D)
+961e57a Revert "cuda: step 1 - delete legacy Q8->FP16 expansion cache and cuBLAS path"
+90fec89 cuda: pick Q8_0 strategy by device memory bandwidth at startup
+38572f9 cuda: query memoryClockRate via cudaDeviceGetAttribute (CUDA 13 compat)
+6658bde cuda: simplify Q8_0 dispatch to mmq-default with explicit overrides</pre>
+</details>
+
+<details><summary>9.2 In-process VMM arena (5 commits)</summary>
+<pre>11e37c2 cuda: probe + supported() helper for in-process VMM arena
+2e1f4f6 cuda: VMM-backed weight arena allocator + teardown
+65e5045 cuda: route fd-cache through the VMM arena when supported
+6a89ea5 cuda: VMM arena chunks default to request-size, not 1024 MiB
+ba42c13 docs: in-process VMM arena is the default for single-process runs</pre>
+</details>
+
+<details><summary>9.3 Weight server sidecar (12 commits)</summary>
+<pre>87d0a60 weight-server: probe VMM backend support
+53fbfd4 weight-server: allocate and upload VMM-owned model ranges
+71e803d weight-server: broker VMM allocation file descriptors
+48d9e49 cuda: import VMM weight ranges from the broker
+e7f7ce1 weight-server: use direct I/O for VMM uploads
+e7edd96 Bind CUDA fd-cache to its owning model_map
+5076c07 cuda: fix merged fd-cache owner declaration
+5b48096 Pre-cache MTP model tensors at CUDA startup
+414c790 cuda: let weight server own derived verifier artifacts
+6f271e9 cuda: import prebuilt Q8 expansion artifacts
+c76edf4 docs: add weight-server guidance to AGENT.md
+0acb50e proof: add weight server harness smoke test</pre>
+</details>
+
+<details><summary>9.4 Proof harness (15 selected commits)</summary>
+<pre>08d8fa1 proof: generalize engine proof runner
+f2f424e proof: add CUDA weight server lifecycle
+76cbc9a proof: support scoped weight server imports
+5a6d3ed proof: record weight server telemetry
+0b1370d proof: guard weight server parent lifetime
+7268f68 proof: lock CUDA weight server ownership
+cda4b4d proof: reject stale weight manifests
+7536533 proof: report weight server validation verdict
+015be9a proof: validate VMM weight-server runs
+9466a03 proof: add named budgets and steady-state timing reports
+5153bfb proof: report steady-state generation throughput
+23cd345 proof: report MTP acceptance as a first-class metric
+59cd8d2 proof: expose derived weight artifacts in harness
+600e2e8 mtp: add CUDA proof matrix
+dbeeec9 proof: default shared weights to base without mtp</pre>
+</details>
+
+<details><summary>9.5 MTP exact verifier (35 selected commits)</summary>
+<pre>ec2dd7c cuda: add MTP top2 verifier paths
+2141a37 mtp: reduce exact verifier output scheduling
+6b9fe82 cuda: fuse MTP verifier MoE down sum for two tokens
+3cad23c cuda: batch Q8 pair projections for MTP verifier
+c5a0c36 cuda: pair decode Q and KV projections
+143623f cuda: write attention output A directly to low layout
+0ccbfcf mtp: add shadow check for custom attention output B
+2fcdeb6 cuda: keep Q8 pair batching on verifier-sized prefill
+0e85718 cuda: bypass sorted MoE gate setup for two-token verify
+7eeed1f proof: make no-opt verifier output the fast MTP baseline
+4be36f8 mtp: suppress draft probes when speculation is disabled
+9b9755a mtp: account full speculative cycle timing
+362bb32 mtp: introduce explicit verifier plan results
+c6d1487 mtp: add fixed-depth decode3 verifier shadow
+5dbed76 mtp: capture two verifier prefix depths
+8f3216e mtp: make raw draft state commits explicit
+bbf61e5 proof: add verifier v2 shadow profile
+462b613 mtp: add opt-in decode3 verifier path
+18c3f59 proof: expose verifier v2 active candidate
+bda1ebb mtp: isolate batch-first verifier experiments
+31cb5e0 proof: add batch-first verifier profile
+aad1401 mtp: make exact verification the default
+d206b04 mtp: prefer sequential exact suffix verification
+d71ee5e mtp: select exact verifier from acceptance history
+f72ba58 mtp: gate exact speculation on verified acceptance
+e07e014 mtp: trim exact decode2 output-head work
+a5af40d mtp: route exact decode2 through a layer entrypoint
+3032763 mtp: profile exact decode2 layer replay
+9ab947e mtp: add shadowed candidate output logits
+614b5a8 mtp: add opt-in certified row0 logits verifier
+3c63d0d mtp: tighten exact candidate output verification
+4b8518b mtp: add exact pair output projection verifier
+f6051da mtp: default exact pair output verification on CUDA
+68166ad mtp: add exact state-barrier decode2 verifier transaction
+d504a89 mtp: add decode2 batch FFN stage-diff diagnostics
+1fb3c93 mtp: pair exact decode2 attention output
+e56b714 mtp: remove staging copies from paired decode2 attention
+6a5714b mtp: isolate decode2 routed MoE batch exactness
+af5cd0a mtp: batch routed MoE inside exact decode2 FFN
+0b99bea mtp: add scalar-order n2 Q8 for exact FFN body batching
+a1f4723 mtp: write exact batched FFN HC rows directly
+7a20ab7 mtp: write exact FFN prefix rows in place
+454f539 mtp: avoid paired Q8 gate-up in exact FFN body
+87e5e39 mtp: add exact decode2 Q-path batch replay diagnostic
+d627216 mtp: add compressor projection replay diagnostic
+ce61a50 mtp: prefer decode2 for optimized exact full-body verifier
+6a86411 mtp: serialize accept-gate state in session snapshot
+9c99333 Add CUDA output-head verifier microbenchmark</pre>
+</details>
+
+<details><summary>9.6 Bench / CLI / server (8 commits)</summary>
+<pre>d4ab17f cli: allow session-path no-MTP timing baselines
+5153bfb proof: report steady-state generation throughput
+9466a03 proof: add named budgets and steady-state timing reports
+d202148 bench: compare no-MTP and exact MTP throughput
+f4ca519 bench: report steady-state gen_tps alongside total
+b79c2d7 server: emit token_ids in chat SSE deltas when return_token_ids=true
+4698319 server: place token_ids at choice level to match vLLM/llama-benchy
+904a0c4 server: snap SSE emission limit to token boundary when return_token_ids</pre>
+</details>
+
+<details><summary>9.7 Upstream merges &amp; the post-merge fix</summary>
+<pre>928fa46 Merge upstream antirez/ds4 main (2026-05-16) into mmq-lift-on-proof-budget
+2c82d52 Merge upstream antirez/ds4 main (2026-05-18) into restore-cublas-and-dispatch
+5bc1e6d Apply Flash graph correctness fixes
+c9dd949 cuda: fix compressed prefill RoPE positions   (= upstream merge-base)
+8294755 fix: pass DS4_SWIGLU_CLAMP_EXP to two local shared-gate-up callers</pre>
+</details>
+
+<hr/>
+<p class="meta">Generated 2026-05-18 from <code>git log $(git merge-base HEAD origin/main)..HEAD</code> on branch <code>pr-prep-2026-05-18</code> (HEAD <code>8294755</code>). Source CSVs in <code>local/docs/ds4_vmm_landing_merged/</code>; design docs in adjacent <code>ds4_*</code> HTML/markdown files; vendor pin in <code>cuda/mmq/VENDOR.md</code>; operator guides in <code>AGENT.md</code> and <code>docs/{cuda-mtp,proof-harness}/</code>.</p>
+
+</body>
+</html>
