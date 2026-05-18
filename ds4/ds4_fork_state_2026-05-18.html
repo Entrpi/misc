@@ -682,7 +682,109 @@ Source: speed-bench on PRO 6000 Blackwell sm_120, CUDA 13.0, V4 Flash IQ2XXS GGU
 </table>
 <p class="meta">No row regresses by more than a single tenth of a percent. VMM is safe to enable as the single-process default for decode-heavy workloads.</p>
 
-<h4>5.4 MTP exact verifier &mdash; GB10 full-context sweep (experimental opt-in)</h4>
+<h4>5.4 Single-machine speed snapshot at ~12k-token prompt</h4>
+<p>
+Single-run CLI numbers for both CUDA targets alongside the existing Mac entries in the project README, with identical settings on each: <code>--ctx 32768 --nothink --temp 0 -n 256</code>, q2 quant, long prompt = first ~40&nbsp;kB of <code>speed-bench/promessi_sposi.txt</code> (12,461 tokens on the V4 Flash tokenizer). Mac numbers are unchanged from the existing table; the two CUDA rows are the fresh measurements taken from the same build the rest of this report describes (mmq + mmvq + graphs with bidirectional stream sync + in-process VMM arena, all default-on).
+</p>
+
+<figure>
+<svg viewBox="0 0 1080 320" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Prefill throughput by machine at ~12k-token prompt">
+  <text x="540" y="22" class="title" text-anchor="middle">Prefill at ~12k-token prompt &mdash; tok/s</text>
+  <g class="axis">
+    <line x1="80" y1="50" x2="80" y2="280"/>
+    <line x1="80" y1="280" x2="1040" y2="280"/>
+    <text x="72" y="284" text-anchor="end">0</text>
+    <text x="72" y="234" text-anchor="end">500</text>
+    <text x="72" y="188" text-anchor="end">1000</text>
+    <text x="72" y="142" text-anchor="end">1500</text>
+    <text x="72" y="96" text-anchor="end">2000</text>
+  </g>
+  <g class="grid">
+    <line x1="80" y1="234" x2="1040" y2="234"/>
+    <line x1="80" y1="188" x2="1040" y2="188"/>
+    <line x1="80" y1="142" x2="1040" y2="142"/>
+    <line x1="80" y1="96"  x2="1040" y2="96"/>
+  </g>
+  <!-- Bars: y = 280 - (val/2200)*184 -->
+  <!-- PRO 6000 1920.66 -->
+  <rect class="bar fork" x="115" y="119" width="150" height="161"/>
+  <text x="190" y="112" class="label" text-anchor="middle">1920.7</text>
+  <text x="190" y="298" class="small" text-anchor="middle">PRO 6000 Blackwell</text>
+  <text x="190" y="312" class="small" text-anchor="middle">CUDA, 96 GB GDDR7</text>
+  <!-- M3 Ultra q2 468.03 -->
+  <rect class="bar upstream" x="315" y="241" width="150" height="39"/>
+  <text x="390" y="234" class="label" text-anchor="middle">468.0</text>
+  <text x="390" y="298" class="small" text-anchor="middle">Mac Studio M3 Ultra</text>
+  <text x="390" y="312" class="small" text-anchor="middle">Metal, 512 GB, q2</text>
+  <!-- M3 Ultra q4 448.82 -->
+  <rect class="bar upstream" x="515" y="243" width="150" height="37"/>
+  <text x="590" y="236" class="label" text-anchor="middle">448.8</text>
+  <text x="590" y="298" class="small" text-anchor="middle">Mac Studio M3 Ultra</text>
+  <text x="590" y="312" class="small" text-anchor="middle">Metal, 512 GB, q4</text>
+  <!-- GB10 404.77 -->
+  <rect class="bar fork" x="715" y="246" width="150" height="34"/>
+  <text x="790" y="239" class="label" text-anchor="middle">404.8</text>
+  <text x="790" y="298" class="small" text-anchor="middle">DGX Spark GB10</text>
+  <text x="790" y="312" class="small" text-anchor="middle">CUDA, 128 GB</text>
+  <!-- M3 Max q2 250.11 -->
+  <rect class="bar upstream" x="915" y="259" width="150" height="21"/>
+  <text x="990" y="252" class="label" text-anchor="middle">250.1</text>
+  <text x="990" y="298" class="small" text-anchor="middle">MacBook Pro M3 Max</text>
+  <text x="990" y="312" class="small" text-anchor="middle">Metal, 128 GB, q2</text>
+</svg>
+<figcaption>PRO 6000 Blackwell leads the long-prompt prefill by ~4&times; the next Mac entry and ~7.7&times; the M3 Max baseline. Green bars are CUDA targets; gray bars are Mac targets unchanged from the README table.</figcaption>
+</figure>
+
+<figure>
+<svg viewBox="0 0 1080 320" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Generation throughput by machine at ~12k-token prompt">
+  <text x="540" y="22" class="title" text-anchor="middle">Generation throughput at ~12k-token prompt &mdash; tok/s</text>
+  <g class="axis">
+    <line x1="80" y1="50" x2="80" y2="280"/>
+    <line x1="80" y1="280" x2="1040" y2="280"/>
+    <text x="72" y="284" text-anchor="end">0</text>
+    <text x="72" y="234" text-anchor="end">10</text>
+    <text x="72" y="188" text-anchor="end">20</text>
+    <text x="72" y="142" text-anchor="end">30</text>
+    <text x="72" y="96" text-anchor="end">40</text>
+    <text x="72" y="50" text-anchor="end">50</text>
+  </g>
+  <g class="grid">
+    <line x1="80" y1="234" x2="1040" y2="234"/>
+    <line x1="80" y1="188" x2="1040" y2="188"/>
+    <line x1="80" y1="142" x2="1040" y2="142"/>
+    <line x1="80" y1="96"  x2="1040" y2="96"/>
+    <line x1="80" y1="50"  x2="1040" y2="50"/>
+  </g>
+  <!-- y = 280 - (val/50)*230 -->
+  <!-- PRO 6000 41.10 -->
+  <rect class="bar fork" x="115" y="91" width="150" height="189"/>
+  <text x="190" y="84" class="label" text-anchor="middle">41.1</text>
+  <text x="190" y="298" class="small" text-anchor="middle">PRO 6000 Blackwell</text>
+  <!-- M3 Ultra q2 27.39 -->
+  <rect class="bar upstream" x="315" y="154" width="150" height="126"/>
+  <text x="390" y="147" class="label" text-anchor="middle">27.4</text>
+  <text x="390" y="298" class="small" text-anchor="middle">M3 Ultra q2</text>
+  <!-- M3 Ultra q4 26.62 -->
+  <rect class="bar upstream" x="515" y="158" width="150" height="122"/>
+  <text x="590" y="151" class="label" text-anchor="middle">26.6</text>
+  <text x="590" y="298" class="small" text-anchor="middle">M3 Ultra q4</text>
+  <!-- GB10 13.79 -->
+  <rect class="bar fork" x="715" y="217" width="150" height="63"/>
+  <text x="790" y="210" class="label" text-anchor="middle">13.8</text>
+  <text x="790" y="298" class="small" text-anchor="middle">DGX Spark GB10</text>
+  <!-- M3 Max q2 21.47 -->
+  <rect class="bar upstream" x="915" y="181" width="150" height="99"/>
+  <text x="990" y="174" class="label" text-anchor="middle">21.5</text>
+  <text x="990" y="298" class="small" text-anchor="middle">M3 Max q2</text>
+</svg>
+<figcaption>PRO 6000 also leads generation (~1.5&times; M3 Ultra). GB10 stays decode-bandwidth-bound on integrated LPDDR5X. Order kept the same across both charts for visual continuity.</figcaption>
+</figure>
+
+<p class="meta">
+Caveat on the quant: the pod's GGUF is the imatrix-tuned q2 variant (<code>...-imatrix.gguf</code>), while the GB10 box has the non-imatrix q2 variant. Both are q2-class with the same asymmetric quantisation policy (IQ2_XXS gate/up, Q2_K down on routed experts; Q8_0 elsewhere) and the throughput numbers shouldn't differ materially between the two; flagging it here for transparency.
+</p>
+
+<h4>5.5 MTP exact verifier &mdash; GB10 full-context sweep (experimental opt-in)</h4>
 <table>
   <thead><tr><th>Run</th><th>Prefill mean</th><th>Gen mean</th><th>Gen first frontier</th><th>Gen last frontier (38912)</th></tr></thead>
   <tbody>
