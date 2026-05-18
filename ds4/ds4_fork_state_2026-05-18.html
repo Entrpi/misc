@@ -945,6 +945,7 @@ Both CUDA rows use the imatrix-tuned q2 variant (<code>...-imatrix.gguf</code>) 
   <li>No CI for the proof harness yet &mdash; runs are manual.</li>
   <li>The fused <code>moe_pair_vec</code> entry exists but isn't wired (applies silu without clamp; the V4 Flash clamp epilogue requires the two-call form).</li>
   <li>Q4_K dense + MoE went through mmq, but a parity sweep at the same depth as Q8_0 hasn't been published.</li>
+  <li><strong><code>./ds4_test --logprob-vectors</code> shipping with 7 pre-existing <code>long_memory_archive</code> failures.</strong> We verified by building at the upstream merge-base <code>c9dd9499</code> (no mmq, no VMM, no graphs, no MTP enhancements, none of our 81 commits applied) and running the same test against the same q2-imatrix GGUF: 7 failures, identical pattern. Most plausibly q2-quantisation noise on a 16k-token needle-in-haystack retrieval task that the official cloud FP API solves but the local q2 doesn't. Not introduced by this PR; upstream territory.</li>
 </ul>
 
 <h2 id="pr">9. Path to upstreaming</h2>
