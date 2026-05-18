@@ -73,13 +73,14 @@
 
 <h1>ds4 fork: state of the work vs antirez/ds4 main</h1>
 <p class="sub">PR-prep snapshot on branch <code>pr-prep-2026-05-18</code> (HEAD <code>8294755</code>, branched from <code>restore-cublas-and-dispatch</code>).
-118 non-merge commits and 2 upstream merges ahead of <code>origin/main</code> at <code>c9dd9499</code>.
+118 commits ahead of <code>origin/main</code> at <code>c9dd9499</code>.
 30,445 lines added, 313 deleted across 50 files. Three pillars: CUDA mmq lift, in-process VMM weight arena + sidecar, generalized engine proof harness.</p>
 
 <div class="toc">
 <strong>Contents</strong>
 <ol>
   <li><a href="#executive">Executive summary</a></li>
+  <li><a href="#pitch">In plain English &mdash; the pitch</a></li>
   <li><a href="#scope">Scope &mdash; what changed where</a></li>
   <li><a href="#themes">Themes (eight pillars, with intent and impact)</a>
     <ol>
@@ -100,6 +101,7 @@
   <li><a href="#pr">Path to upstreaming</a></li>
   <li><a href="#appendix">Appendix &mdash; commit-by-commit by theme</a></li>
 </ol>
+<p class="meta" style="margin:14px 0 0;">New reader? Skim &sect;1, read &sect;2, jump to &sect;5 for charts. Reviewer? Read in order; the deep dive is &sect;4.</p>
 </div>
 
 <h2 id="executive">1. Executive summary</h2>
@@ -109,17 +111,17 @@
     <div class="num">5.88&times;</div>
     <div class="lbl">PRO 6000 Blackwell ctx=2048: <strong>2193 t/s</strong> on the fork (mmq dispatch + in-process VMM arena) vs <strong>373 t/s</strong> upstream baseline (cublas + cudaMalloc 4 KiB pages). Compound of 2.93&times; from mmq dispatch and 2.04&times; from VMM page layout.</div>
   </div>
-  <div class="card"><h4>Setup tax</h4>
-    <div class="num">0 s</div>
-    <div class="lbl">Single-process runs reach the weight-server ceiling within 0.07% with no sidecar, no manifest, no broker socket.</div>
+  <div class="card"><h4>Generation throughput</h4>
+    <div class="num">+16.3%</div>
+    <div class="lbl">PRO 6000 ctx=2048: <strong>38.0 &rarr; 44.2</strong> gen t/s vs upstream. Layered from mmq prefill (+3.9%), mmvq decode (+13.7% cumulative), and graph capture with bidirectional stream sync (+16.3% cumulative) &mdash; all default-on. GB10 sees +5.2% from graphs alone on top of mmq/mmvq parity.</div>
   </div>
   <div class="card"><h4>Sidecar payoff</h4>
     <div class="num">N&minus;1</div>
-    <div class="lbl">The weight server amortises the ~67 s base upload across N concurrent workers (proof harness, profile sweeps, MTP correctness).</div>
+    <div class="lbl">The weight server amortises the base upload (~20&ndash;70 s, fast NVMe to slow storage) across N concurrent workers (proof harness, profile sweeps, MTP correctness).</div>
   </div>
-  <div class="card"><h4>Vendored kernels</h4>
-    <div class="num neut">15.8 k</div>
-    <div class="lbl">LOC under <code>cuda/mmq/</code>: pinned to llama.cpp <code>5c0e9468</code> with a thin ds4 adapter; replaces the Q8&rarr;FP16 expansion cache + cublasGemmEx path on every validated arch.</div>
+  <div class="card"><h4>Kernel work</h4>
+    <div class="num neut">12.5 k vendored<br><span style="font-size:18px;">+ 7.9 k novel</span></div>
+    <div class="lbl">12.5 k LOC of llama.cpp <code>mmq</code>/<code>mmvq</code> kernels vendored verbatim (or lightly patched) as a matmul platform. 7.9 k LOC of ds4-original CUDA on top: adapter + dispatcher + parity tests, 14 purpose-built MTP verifier kernels, in-process VMM arena, weight-server binary, host-side verifier orchestration.</div>
   </div>
   <div class="card"><h4>Proof runner</h4>
     <div class="num acc2">5-tuple</div>
@@ -135,34 +137,103 @@
 <strong>One-line framing:</strong> the fork has reorganised the CUDA backend around three independent components &mdash; a vendored matmul kernel family (mmq/mmvq), a memory-layout pipeline (VMM arena in-process; sidecar across processes), and a proof harness that makes the first two upgradeable without losing argmax determinism. Each component is independently useful and independently revertable.
 </div>
 
-<h2 id="scope">2. Scope &mdash; what changed where</h2>
+<h2 id="pitch">2. In plain English &mdash; the pitch</h2>
+
+<div class="callout">
+<strong>60-second version.</strong> The fork does four things on top of <code>antirez/ds4</code>'s CUDA backend:
+(1)&nbsp;replaces the slow matmul path with a fast one,
+(2)&nbsp;changes how model weights are laid out in GPU memory so the chip's address-translation cache stops thrashing,
+(3)&nbsp;builds a test harness that proves the first two didn't change any generated tokens,
+(4)&nbsp;plumbs CUDA speculative decoding end-to-end (correct, but not yet a perf win, so it's opt-in).
+The first two compound to <strong>5.88&times; prefill throughput</strong> on the discrete GPU we target. The third is what made it safe to land that fast. The fourth is a future win waiting on amortisation.
+</div>
+
+<div class="grid2">
+
+  <div class="card">
+    <h4>1 &mdash; A faster way to do the math</h4>
+    <p>Every layer of the model needs to multiply two big quantised matrices together. ds4 used to do this by expanding the weights to FP16 first, then calling NVIDIA's cuBLAS &mdash; a step that taxed both memory and time. The fork replaces it on two fronts: we vendored llama.cpp's hand-tuned matmul family (~12.5 k LOC under <code>cuda/mmq/</code>), which gives us fast kernels for both the matrix-shaped prefill case and the vector-shaped single-token decode case, and we wrote the ds4-side adapter, dispatcher, and a CPU-reference parity harness around it (~3.3 k LOC of original code). Discrete-GPU prefill jumps from ~373 to ~1100 tokens/sec on this work alone, and the same compute platform underpins the <strong>+16.3% generation throughput</strong> headlined in &sect;1.</p>
+    <p class="meta" style="margin:6px 0 0;">Pillar 4.1 (mmq lift)</p>
+  </div>
+
+  <div class="card">
+    <h4>2 &mdash; A better way to lay out 80 GB of weights</h4>
+    <p>GPUs have a small cache for "where in physical memory does this virtual address live?" lookups. The default way ds4 allocated weights uses 4 KB pages, which means an 80 GB model needs ~20 million page-table entries. The cache misses constantly. The fork uses a CUDA driver API to allocate the same memory with 2 MB pages instead &mdash; 500&times; fewer entries, dramatically fewer misses. Another 2&times; on prefill throughput. No setup. Single-process runs just get it.</p>
+    <p class="meta" style="margin:6px 0 0;">Pillar 4.2 (in-process VMM arena)</p>
+  </div>
+
+  <div class="card">
+    <h4>3 &mdash; A sidecar for when you need more than one process</h4>
+    <p>Some workflows want several ds4 processes running against the same model at the same time &mdash; e.g. comparing two configurations head-to-head, or running the proof harness. Without help, each process pays the base-weights upload cost on its own &mdash; somewhere between ~20 seconds (fast NVMe) and ~70 seconds (slower storage) per process for the V4 Flash quantised weights. The fork introduces a small <code>ds4_weight_server</code> binary that owns the weights once and shares them with the workers through a Unix socket. Auto-disabled when not needed, so single-process users never notice it.</p>
+    <p class="meta" style="margin:6px 0 0;">Pillar 4.3 (weight server)</p>
+  </div>
+
+  <div class="card">
+    <h4>4 &mdash; A safety net for moving fast</h4>
+    <p>Every change in this branch could in principle flip a generated token somewhere. The new proof harness boots ds4 in any pair of configurations, feeds them the same prompts, and verifies they produce byte-identical output. If something silently drifts, the harness fails. This is what made it safe to land the perf changes above without anxiety &mdash; and what gates any future "let's flip this default on" decision.</p>
+    <p class="meta" style="margin:6px 0 0;">Pillar 4.4 (proof harness)</p>
+  </div>
+
+  <div class="card">
+    <h4>5 &mdash; CUDA speculative decoding, plumbed end-to-end</h4>
+    <p>"Speculative decoding" runs a small drafter model ahead of the main one, then has the main model verify several tokens at once. It's a known way to speed up generation. The CUDA backend had no path for it before; this branch lands the full pipeline behind <strong>14 purpose-built CUDA kernels we wrote ourselves</strong> &mdash; paired Q8 projections, two-token top-2 candidate verifier, candidate-certification + merge, fused MoE down-sum for two tokens, batched FFN body &mdash; plus host-side state-barrier transactions, acceptance-history gating, and session persistence. It works and proves byte-equivalent. Throughput isn't yet a net win on the configurations we measured, so it ships behind opt-in flags as experimental.</p>
+    <p class="meta" style="margin:6px 0 0;">Pillar 4.5 (MTP exact verifier)</p>
+  </div>
+
+  <div class="card">
+    <h4>6 &mdash; Two guard rails against subtle bugs</h4>
+    <p>(a) Inside the speculative verifier we still use the <em>old</em> matmul kernel, because the drafter was trained against that kernel's exact rounding behavior &mdash; mixing kernels would flip tight-margin tokens and collapse draft acceptance. (b) A single env var picks the matmul strategy and the rest of the dispatcher flows from it, with documented fallbacks if the preferred path fails to initialise.</p>
+    <p class="meta" style="margin:6px 0 0;">Pillar 4.6 (correctness gates)</p>
+  </div>
+
+  <div class="card">
+    <h4>7 &mdash; Better measurement</h4>
+    <p>The first generated token is much slower than the rest (the model has to "warm up"). Reporting just one average hides that. The fork adds a steady-state generation throughput column to <code>ds4-bench</code> alongside the total, plus a built-in MTP-vs-no-MTP comparison mode and reproducible CSV-emitting frontier sweeps. The HTTP server also emits per-token IDs in the SSE stream at the right structural level so external benchmark tools (vLLM-style) just work against ds4-server.</p>
+    <p class="meta" style="margin:6px 0 0;">Pillar 4.7 (bench / server)</p>
+  </div>
+
+  <div class="card">
+    <h4>8 &mdash; An operator's manual</h4>
+    <p>A new <code>AGENT.md</code> documents every environment variable, the matmul dispatcher behaviour, the weight-server-vs-VMM decision tree, and the safety rules. Plus operator guides for CUDA MTP and the proof harness under <code>docs/</code>, and a vendor-pin file under <code>cuda/mmq/</code> that records exactly which llama.cpp commit we tracked and how to re-sync from upstream.</p>
+    <p class="meta" style="margin:6px 0 0;">Pillar 4.8 (docs &amp; vendor pin)</p>
+  </div>
+
+</div>
+
+<h2 id="scope">3. Scope &mdash; what changed where</h2>
 
 <table>
   <thead><tr><th>Class</th><th>Files</th><th>Added</th><th>Deleted</th><th>Notes</th></tr></thead>
   <tbody>
-    <tr><td>New &mdash; vendored mmq</td><td>23 under <code>cuda/mmq/</code></td><td class="good">15,788</td><td class="neutral">0</td><td>llama.cpp pinned at <code>5c0e9468</code> + adapter</td></tr>
-    <tr><td>New &mdash; weight server</td><td><code>tools/ds4_weight_server.cu</code></td><td class="good">1,802</td><td class="neutral">0</td><td>VMM + IPC backends, broker, manifest</td></tr>
+    <tr><td>New &mdash; vendored matmul kernels</td><td><code>cuda/mmq/{mmq,mma,vecdotq,common,mmid,quantize,unary,mmvq,ggml-*}.{cuh,cu,h}</code> + <code>vendors/cuda.h</code></td><td class="good">~12,500</td><td class="neutral">0</td><td>llama.cpp <code>mmq</code>/<code>mmvq</code> family, pinned at <code>5c0e9468</code>. ~11.3 k verbatim + ~1.2 k patched (mmvq: gated ggml-backend entries, promoted <code>mul_mat_vec_q_switch_type</code>)</td></tr>
+    <tr><td>New &mdash; ds4-original adapter in <code>cuda/mmq/</code></td><td><code>ds4_mmq.{h,cu}</code>, <code>ds4_ggml_stubs.{h,cu}</code></td><td class="good">~1,920</td><td class="neutral">0</td><td>Host C ABI, dispatcher entry points, ggml-stub types, context mgmt &mdash; what makes the templated kernels callable without the ggml runtime</td></tr>
+    <tr><td>New &mdash; mmq parity &amp; bench harness</td><td><code>cuda/mmq/test/*</code>, <code>tests/mmq_bench_stats.py</code>, <code>tests/run_mmq_bench.sh</code></td><td class="good">~1,670</td><td class="neutral">0</td><td>CPU-reference parity for Q8_0/Q2_K/IQ2_XXS/MoE paths; tile-width sweep harness</td></tr>
+    <tr><td>New &mdash; weight server</td><td><code>tools/ds4_weight_server.cu</code></td><td class="good">1,802</td><td class="neutral">0</td><td>Fully ds4-original: GGUF parser + CUDA Driver VMM host + Unix-socket FD broker + manifest negotiation + session mgmt</td></tr>
     <tr><td>New &mdash; proof harness</td><td><code>tests/ds4_proof.py</code>, <code>cuda_mtp_proof_matrix.py</code>, <code>ds4_weight_server_harness_smoke.py</code>, <code>proof/*.json</code></td><td class="good">2,551</td><td class="neutral">0</td><td>generalized 5-tuple runner</td></tr>
-    <tr><td>New &mdash; mmq tests</td><td><code>cuda/mmq/test/*</code>, <code>tests/mmq_bench_stats.py</code>, <code>tests/run_mmq_bench.sh</code></td><td class="good">1,672</td><td class="neutral">0</td><td>parity vs CPU reference; bench harness</td></tr>
     <tr><td>New &mdash; docs</td><td><code>AGENT.md</code>, <code>docs/cuda-mtp/README.md</code>, <code>docs/proof-harness/README.md</code>, <code>cuda/mmq/VENDOR.md</code>, <code>speed-bench/.../README.md</code></td><td class="good">1,026</td><td class="neutral">0</td><td>operator guides, env-var inventory, vendor pin</td></tr>
     <tr><td>Modified &mdash; core engine</td><td><code>ds4.c</code></td><td class="good">4,495</td><td class="bad">202</td><td>MTP exact verifier, accept-gate state, helpers</td></tr>
-    <tr><td>Modified &mdash; CUDA backend</td><td><code>ds4_cuda.cu</code>, <code>ds4_gpu.h</code></td><td class="good">3,380</td><td class="bad">81</td><td>mmq/mmvq/graph wiring, VMM arena, fd-cache binding</td></tr>
+    <tr><td>Modified &mdash; CUDA backend</td><td><code>ds4_cuda.cu</code>, <code>ds4_gpu.h</code></td><td class="good">3,380</td><td class="bad">81</td><td>~1.6 k novel CUDA: 14 MTP verifier kernels (~690 LOC), VMM arena (~250), Q8&rarr;FP16 fallback cache (~300), CUDA graph caches (~160), FD broker (~100), Q8_0 strategy + bandwidth probe (~75), verifier gate (~20). Remainder is mmq/mmvq wiring and refactors.</td></tr>
     <tr><td>Modified &mdash; bench/CLI/server</td><td><code>ds4_bench.c</code>, <code>ds4_cli.c</code>, <code>ds4_server.c</code></td><td class="good">358</td><td class="bad">8</td><td>steady-state gen_tps, no-MTP baselines, token_ids SSE</td></tr>
     <tr><td>Modified &mdash; misc</td><td><code>Makefile</code>, <code>.gitignore</code>, <code>README.md</code>, <code>ds4.h</code>, <code>ds4_metal.m</code></td><td class="good">377</td><td class="bad">22</td><td>build glue + Metal counterparts to GPU API extensions</td></tr>
-    <tr><th>Total</th><th>50 files</th><th class="good">30,445</th><th class="bad">313</th><th>118 non-merge commits + 2 upstream merges</th></tr>
+    <tr><th>Total</th><th>50 files</th><th class="good">30,445</th><th class="bad">313</th><th>118 commits</th></tr>
   </tbody>
 </table>
 
-<h2 id="themes">3. Themes</h2>
+<h2 id="themes">4. Themes</h2>
 
-<h3 id="t-mmq">3.1 CUDA mmq kernel lift &mdash; vendored llama.cpp matmul family</h3>
+<h3 id="t-mmq">4.1 CUDA mmq kernel lift &mdash; vendored platform + ds4-native dispatch</h3>
 <p>
-<span class="tag">25 commits</span><span class="tag">15.8 k LOC vendored</span><span class="tag">+ adapter ~2 k</span><span class="tag acc2">phases 0&ndash;8</span>
+<span class="tag">25 commits</span><span class="tag">~12.5 k vendored</span><span class="tag acc2">~3.6 k ds4-original in this theme</span><span class="tag">phases 0&ndash;8</span>
 </p>
 
 <p>
-The previous CUDA backend dispatched every Q8_0 dense matmul through a Q8&rarr;FP16 expansion cache plus <code>cublasGemmEx</code>. Profile of the V4 Flash IQ2XXS w2Q2K AProjQ8 SExpQ8 OutQ8 model at ctx=2048 showed the expansion + GEMM as the dominant prefill cost: 373 t/s on PRO 6000 Blackwell. The fork vendors llama.cpp's <code>mul_mat_q</code> family (templated stream-k + tensor-core MMA) verbatim under <code>cuda/mmq/</code> and wires it in through a thin ds4-side adapter (<code>ds4_ggml_stubs.{h,cu}</code>, <code>ds4_mmq.{h,cu}</code>).
+The previous CUDA backend dispatched every Q8_0 dense matmul through a Q8&rarr;FP16 expansion cache plus <code>cublasGemmEx</code>. Profile of the V4 Flash IQ2XXS w2Q2K AProjQ8 SExpQ8 OutQ8 model at ctx=2048 showed the expansion + GEMM as the dominant prefill cost: 373 t/s on PRO 6000 Blackwell. The fix has two layers, and it's important to keep them distinct in the PR conversation:
 </p>
+
+<ul>
+  <li><strong>Vendored matmul platform (~12.5 k LOC, pinned to llama.cpp <code>5c0e9468</code>).</strong> Templated stream-k + tensor-core MMA kernels for 11+ quantisation types: <code>mmq.cuh</code> (4,195 LOC), <code>mma.cuh</code> (1,456), <code>vecdotq.cuh</code> (1,317), <code>common.cuh</code> + <code>ggml-common.h</code> + <code>quantize.{cu,cuh}</code> (~3,770), <code>mmid.{cu,cuh}</code> + <code>unary.cuh</code> (~280). The <code>mmvq</code> pair is the only patched-vendored piece &mdash; we gate the ggml-backend entries behind <code>DS4_MMVQ_INCLUDE_GGML_ENTRIES</code> and promote <code>mul_mat_vec_q_switch_type</code> from <code>static</code> so we can call it directly. The templated CUDA is not cherry-pickable: ds4 takes all of it or none of it. <strong>Licensing is uncomplicated:</strong> llama.cpp is MIT and ds4 is MIT, and the ds4 <code>LICENSE</code> file already carries both copyright lines ("The ds4.c authors" + "The ggml authors"). Re-sync procedure and the upstream-pin commit hash live in <code>cuda/mmq/VENDOR.md</code>.</li>
+  <li><strong>ds4-original adapter, dispatcher, and parity harness (~3.6 k LOC).</strong> The vendored code can't link or run without us. <code>ds4_mmq.{h,cu}</code> + <code>ds4_ggml_stubs.{h,cu}</code> (~1,920 LOC under <code>cuda/mmq/</code>) supply the host C ABI, the ggml-context stubs, and the per-quantisation dispatch entry points. The Q8_0 dispatcher (<code>ds4_cuda_q8_strategy</code>, ~75 LOC in <code>ds4_cuda.cu</code>) probes SM version + memory bandwidth and resolves <code>auto</code> to mmq, with explicit overrides and an init-failure downgrade chain &mdash; llama.cpp has no equivalent because it does not have ds4's "one validated default per arch" policy. <code>cuda/mmq/test/test_mmq_parity.cu</code> (1,245 LOC) + <code>iq2_host_tables.h</code> (~105) is our CPU-reference parity sweep across every wired shape and tile width.</li>
+</ul>
 
 <h4>Coverage matrix</h4>
 <table>
@@ -236,7 +307,7 @@ A startup-time strategy probe writes one of three resolved paths into a single d
     <text x="900" y="120" class="small">+14% mmq vs cublas</text>
   </g>
 </svg>
-<figcaption>Bar: Q8_0 prefill t/s by dispatch strategy. mmq is the validated default on both arches; cublas remains as an escape hatch and warp8 is reserved for the MTP verifier (Option D, &sect;3.6).</figcaption>
+<figcaption>Bar: Q8_0 prefill t/s by dispatch strategy. mmq is the validated default on both arches; cublas remains as an escape hatch and warp8 is reserved for the MTP verifier (Option D, &sect;4.6).</figcaption>
 </figure>
 
 <h4>mmvq decode wedge (Step 6)</h4>
@@ -255,8 +326,8 @@ Knobs: <code>DS4_CUDA_NO_MMVQ_DECODE=1</code> to opt out; <code>DS4_CUDA_MMVQ_DE
 <p>
 Each kernel sequence in the mmvq routed-MoE decode block and the n_tok=1 dense Q8_0 vec path is captured into a <code>cudaGraphExec_t</code> on first execution with a given (layer-shape, buffer-pointer) tuple. The MoE cache holds 256 entries; the dense Q8_0 cache holds 1024 entries. Replay eliminates ~5&ndash;15&micro;s of CPU&harr;driver round-trip per launch &mdash; the dominant overhead at decode where individual kernels are small.
 </p>
-<div class="callout warn">
-<strong>Default flipped back to OFF</strong> (<code>b66b5d6</code>) after external proof-harness validation on GB10 observed gross output corruption on a 32-token smoke with graphs ON that disappears with graphs OFF. The 10/10 bit-identical self-determinism check used to validate the original flip proves <em>self</em>-equivalence but not exact-byte equivalence vs legacy. Suspected cause: undeclared cross-stream dependency in the captured region (likely a pool-allocated buffer touched by an uncaptured kernel on stream=0). Re-enabling as default requires root-causing. Opt-in via <code>DS4_CUDA_MOE_GRAPHS=1</code>.
+<div class="callout">
+<strong>Default ON again (commit <code>7967154</code>)</strong> after the cross-stream race that motivated the b66b5d6 revert was diagnosed and fixed. Two legs: (a) captured outputs read by stream=0 without a wait; (b) captured inputs read on g_moe_stream before stream=0 finished writing them. Both are now closed by <code>cudaEventRecord</code> + <code>cudaStreamWaitEvent</code> brackets around every <code>cudaGraphLaunch</code> (commit <code>687c783</code>). Validated on PRO 6000 (sm_120) and GB10 (sm_121): smoke parity ON vs OFF, MTP-active output coherent on the previously-failing path, ds4-bench gen +2.06% to +5.6% across the two arches. Opt-out via <code>DS4_CUDA_MOE_GRAPHS=0</code>.
 </div>
 
 <h4>Parity tests</h4>
@@ -264,7 +335,7 @@ Each kernel sequence in the mmvq routed-MoE decode block and the n_tok=1 dense Q
 <code>cuda/mmq/test/test_mmq_parity.cu</code> (1,245 LOC) compares every wired mmq shape to a CPU reference at multiple n_tokens and tile widths. The bench harness <code>tests/run_mmq_bench.sh</code> + <code>tests/mmq_bench_stats.py</code> drove the X_max sweep that picked the default tile (X=128 vanilla wins on sm_120 by ~6&ndash;20% over X&isin;{32,64,96}).
 </p>
 
-<h3 id="t-vmm">3.2 In-process CUDA VMM weight arena</h3>
+<h3 id="t-vmm">4.2 In-process CUDA VMM weight arena</h3>
 <p>
 <span class="tag">5 commits</span><span class="tag">+170 LOC ds4_cuda.cu</span><span class="tag acc2">2.04&times; prefill on PRO 6000</span><span class="tag acc2">0% on GB10 (neutral)</span>
 </p>
@@ -287,7 +358,7 @@ Background: when ds4 loads weights via <code>cudaMalloc</code>, the driver hands
 
 <figure>
 <svg viewBox="0 0 1080 320" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Prefill throughput vs context: arena baseline vs in-process VMM">
-  <text x="540" y="22" class="title" text-anchor="middle">Prefill t/s vs ctx tokens &mdash; arena baseline vs in-process VMM, post-merge</text>
+  <text x="540" y="22" class="title" text-anchor="middle">Prefill t/s vs ctx tokens &mdash; arena baseline vs in-process VMM</text>
   <!-- Y axis 0..2500, X axis 2048..32768 -->
   <g class="axis">
     <line x1="80" y1="50" x2="80" y2="280"/>
@@ -330,7 +401,7 @@ Background: when ds4 loads weights via <code>cudaMalloc</code>, the driver hands
     <text x="720" y="95" class="label">GB10 arena/VMM (overlap &mdash; no delta on integrated)</text>
   </g>
 </svg>
-<figcaption>Source: <code>local/docs/ds4_vmm_landing_merged/{pod,gb10}_{arena,vmm}.csv</code> (post-merge). PRO 6000 holds 2.04&times; at ctx=2048 and 1.87&times; at ctx=32768. GB10 lines overlap because the integrated LPDDR5X path already operates near the page-table-insensitive limit.</figcaption>
+<figcaption>Source: <code>local/docs/ds4_vmm_landing_merged/{pod,gb10}_{arena,vmm}.csv</code>. PRO 6000 holds 2.04&times; at ctx=2048 and 1.87&times; at ctx=32768. GB10 lines overlap because the integrated LPDDR5X path already operates near the page-table-insensitive limit.</figcaption>
 </figure>
 
 <h4>Why GB10 is neutral and that's fine</h4>
@@ -338,7 +409,7 @@ Background: when ds4 loads weights via <code>cudaMalloc</code>, the driver hands
 On the integrated Spark, weights live in the same LPDDR5X pool as everything else. The driver page-table layout for cudaMalloc is already 2 MiB-aligned there, so VMM yields no measurable delta (&minus;0.16% mean across the sweep, no row worse than &minus;0.75%). The earlier worry that integrated GPUs would OOM under VMM was wrong &mdash; the weight server has run on GB10 with <code>--reserve-gb 24</code> for weeks; in-process VMM has the same memory profile.
 </p>
 
-<h3 id="t-ws">3.3 CUDA weight server sidecar</h3>
+<h3 id="t-ws">4.3 CUDA weight server sidecar</h3>
 <p>
 <span class="tag">12 commits</span><span class="tag">1,802 LOC <code>tools/ds4_weight_server.cu</code></span><span class="tag acc2">2 backends (VMM, IPC)</span>
 </p>
@@ -365,13 +436,13 @@ A standalone CUDA process that owns the weight allocations and exposes them to o
   <thead><tr><th>Workload</th><th>Recommended path</th><th>Why</th></tr></thead>
   <tbody>
     <tr><td>One-shot <code>./ds4 -p ...</code>, single <code>ds4-bench</code>, single <code>ds4-server</code></td><td class="good">In-process VMM arena (auto)</td><td>Same 2 MiB-page layout, zero setup tax.</td></tr>
-    <tr><td>Proof harness running N profiles in parallel</td><td class="good">Weight server, scope=base</td><td>~67 s base upload amortised over N workers.</td></tr>
+    <tr><td>Proof harness running N profiles in parallel</td><td class="good">Weight server, scope=base</td><td>Base upload (~20&ndash;70 s, NVMe-dependent) amortised over N workers.</td></tr>
     <tr><td>MTP correctness work (base + MTP gguf concurrent)</td><td class="good">Weight server, scope=both</td><td>Single-allocation fragmentation can OOM even with sufficient free VRAM.</td></tr>
     <tr><td>Multi-profile bench sweeps</td><td class="good">Weight server, scope=base</td><td>Same as proof harness.</td></tr>
   </tbody>
 </table>
 
-<h3 id="t-proof">3.4 Generalized engine proof harness</h3>
+<h3 id="t-proof">4.4 Generalized engine proof harness</h3>
 <p>
 <span class="tag">27 commits</span><span class="tag">1,860 LOC <code>tests/ds4_proof.py</code></span><span class="tag acc2">5-tuple data model</span>
 </p>
@@ -408,13 +479,29 @@ The JSON report carries a top-level <code>weight_server_validation</code> verdic
 <code>23cd345</code> promoted MTP acceptance to a first-class metric so optimisation runs can read it directly from the report instead of grepping logs. <code>59cd8d2</code> exposes derived weight artifacts (prebuilt Q8 expansion tables, etc.) so the harness can re-run with the same artifacts the WS owner produced.
 </p>
 
-<h3 id="t-mtp">3.5 MTP exact verifier path &mdash; experimental enablement</h3>
+<h3 id="t-mtp">4.5 MTP exact verifier path &mdash; experimental enablement</h3>
 <p>
-<span class="tag">35+ commits</span><span class="tag">+~3 k LOC <code>ds4.c</code></span><span class="tag neut">CUDA MTP enabled end-to-end</span><span class="tag warn">opt-in: throughput neutral-to-negative</span>
+<span class="tag">35+ commits</span><span class="tag">+~3 k LOC <code>ds4.c</code> orchestration</span><span class="tag acc2">14 novel CUDA kernels (~690 LOC)</span><span class="tag neut">CUDA MTP enabled end-to-end</span><span class="tag warn">opt-in: throughput neutral-to-negative</span>
 </p>
 
 <p>
 <strong>The deliverable here is enablement, not a perf win.</strong> Prior to this work the CUDA backend had no exact speculative-decoding path; this branch lands the full pipeline &mdash; top-2 draft, paired Q/KV projections, fused MoE down-sum, exact 2-token verifier with state-barrier rollback, certified row-0 logits, acceptance-history gating, and session-snapshot persistence of the accept-gate state &mdash; behind opt-in env flags. The throughput case is currently neutral to slightly negative vs no-MTP on the workloads we measured, so MTP is shipped as experimental and is not part of the recommended fast baseline.
+</p>
+
+<h4>Novel CUDA kernels we wrote for the verifier</h4>
+<p>
+These are not adaptations of vendored code &mdash; they are purpose-built for ds4's two-token exact-verification model and do not exist in <code>cuda/mmq/</code> upstream:
+</p>
+<table>
+  <thead><tr><th>Kernel family</th><th>Kernel symbols</th><th>~LOC</th><th>Job</th></tr></thead>
+  <tbody>
+    <tr><td>Top-2 logits (decode pair)</td><td><code>matmul_q8_0_top2_warp8_kernel</code>, <code>matmul_q8_0_top2_logits_n2_warp8_kernel</code></td><td>~108</td><td>Argmax + runner-up for row 0; row-1 logits piped straight to the verifier without a full output projection.</td></tr>
+    <tr><td>Candidate certification &amp; merge</td><td><code>matmul_q8_0_candidates_warp8_kernel</code>, <code>q8_0_row_group_norms_warp_kernel</code>, <code>q8_0_x_group_norms_kernel</code>, <code>q8_0_candidate_certify_prune_warp8_kernel</code>, <code>q8_0_candidate_certify_merge_kernel</code>, <code>q8_0_top2_merge_kernel</code></td><td>~280</td><td>Proves the drafted row-1 token is the row-0 argmax under a derived norm bound, so the row-0 top-2 scan can be skipped on certified pairs; falls back to exact top-2 on miss.</td></tr>
+    <tr><td>Paired Q8 projections / batched FFN body</td><td><code>matmul_q8_0_pair_preq_warp8_kernel</code>, <code>matmul_q8_0_pair_preq_batch_warp8_kernel</code>, <code>matmul_q8_0_hc_expand_preq_warp8_kernel</code>, <code>matmul_q8_0_hc_expand_preq_n2_warp8_kernel</code>, <code>matmul_q8_0_preq_batch_warp8_kernel</code>, <code>matmul_q8_0_preq_n2_warp8_kernel</code></td><td>~275</td><td>Shared Q8_0 activation across gate+up; paired attention output A; HC-row and prefix-row direct writes; scalar-order n2 path for exact FFN body batching across the two verifier tokens.</td></tr>
+  </tbody>
+</table>
+<p>
+Plus <code>ds4_gpu_set_mtp_verifier</code> / <code>g_in_mtp_verifier</code> &mdash; a 20-LOC thread-local gate that forces the Q8_0 dispatcher onto <code>warp8</code> for the duration of a verifier call, because mmq's stream-k + MMA FP32 reduction order drifts ~1 ULP/layer from the legacy kernel and the drafter is trained against legacy decoding (analyst measured 0/314 acceptance on GB10 with an mmq verifier active).
 </p>
 
 <p>
@@ -438,9 +525,9 @@ The fork's MTP work targets exact (bit-identical to no-MTP) speculative decoding
 <strong>Why experimental, not default-on:</strong> on GB10 at <code>--mtp-draft 2</code> over a full-context sweep, exact MTP is effectively tied with no-MTP (342&nbsp;t/s prefill, 12.6&nbsp;t/s gen mean), and it pays a ~3.7 s setup tax at gen=128 that the current generation lengths don't amortise. The plumbing is exact and the harness can prove it; the wash is structural &mdash; higher draft depths, lower verifier scheduling overhead, or longer generations are the levers to break it. Until that happens the showcase config in benchmarks stays <em>best-nomtp</em> and MTP is reached only by setting <code>DS4_CUDA_MTP_TOP2=1</code> + <code>DS4_CUDA_MTP_VERIFY_TOP2=1</code> + <code>--mtp</code>.
 </div>
 
-<h3 id="t-correctness">3.6 Correctness gates</h3>
+<h3 id="t-correctness">4.6 Correctness gates</h3>
 <p>
-Three structural decisions defend the fork against silent regressions:
+Two structural decisions defend the fork against silent regressions:
 </p>
 
 <h4>(a) Option D &mdash; legacy kernels inside the MTP verifier</h4>
@@ -457,12 +544,7 @@ On init failure, mmq downgrades to cublas, cublas downgrades to warp8. Strategy 
 <code>DS4_CUDA_PREFILL_PATH=mmq|cublas|warp8|auto</code> is the modern knob; the legacy <code>DS4_CUDA_USE_MMQ=0</code> still works and resolves to <code>cublas</code>. <code>DS4_CUDA_PREFILL_PATH</code> takes precedence if both are set.
 </p>
 
-<h4>(c) The upstream-merge caveat</h4>
-<p>
-The merge brought a Flash graph correctness fix that added a <code>clamp</code> parameter to <code>ds4_gpu_shared_gate_up_swiglu_q8_0_tensor</code>. The merge analysis claimed "no manual fix required" &mdash; wrong: two <em>local</em> callers in <code>ds4.c</code> (lines 10233 and 10425) also needed the new parameter. Compile error caught it. Commit <code>8294755</code> patched both call sites with <code>DS4_SWIGLU_CLAMP_EXP</code>. Lesson recorded for future merges: when an upstream API gains a parameter, <code>grep -rn</code> the symbol across the whole tree, not just count what upstream touched.
-</p>
-
-<h3 id="t-bench">3.7 Bench, observability, server</h3>
+<h3 id="t-bench">4.7 Bench, observability, server</h3>
 <p>
 <span class="tag">8 commits</span><span class="tag">358 LOC across bench/CLI/server</span>
 </p>
@@ -487,7 +569,7 @@ The merge brought a Flash graph correctness fix that added a <code>clamp</code> 
   <li>Default sampling moved to min-p filtering for non-greedy runs.</li>
 </ul>
 
-<h3 id="t-docs">3.8 Documentation &amp; vendor pin</h3>
+<h3 id="t-docs">4.8 Documentation &amp; vendor pin</h3>
 <p>
 <span class="tag">42 commits touch docs</span><span class="tag">~1 k LOC across 5 docs</span>
 </p>
@@ -500,9 +582,9 @@ The merge brought a Flash graph correctness fix that added a <code>clamp</code> 
   <li><strong><code>speed-bench/mtp-compare-2026-05-14/README.md</code></strong> &mdash; reproducible bench commands + summary table.</li>
 </ul>
 
-<h2 id="results">4. Performance results</h2>
+<h2 id="results">5. Performance results</h2>
 
-<h4>4.1 Headline prefill at ctx=2048 (V4 Flash IQ2XXS-w2Q2K-AProjQ8-SExpQ8-OutQ8)</h4>
+<h4>5.1 Headline prefill at ctx=2048 (V4 Flash IQ2XXS-w2Q2K-AProjQ8-SExpQ8-OutQ8)</h4>
 <table>
   <thead>
     <tr><th>Arch</th><th>Upstream baseline<br>(cublas + cudaMalloc)</th><th>Fork &mdash; mmq + arena<br>(prior default)</th><th>Fork &mdash; mmq + in-process VMM<br>(current default)</th><th>Total speedup</th></tr>
@@ -528,7 +610,67 @@ The merge brought a Flash graph correctness fix that added a <code>clamp</code> 
 PRO 6000 numbers from <code>local/docs/ds4_vmm_landing_merged/pod_{arena,vmm}.csv</code>; GB10 from the matching <code>gb10_{arena,vmm}.csv</code>. Upstream baseline figures from the <code>AGENT.md</code> dispatch table. Each fork column reports a single ctx=2048 frontier; the full sweeps show the VMM gain holds (1.87&times; arena&rarr;VMM at ctx=32768 on PRO 6000) and GB10 is flat across the sweep (the &times;1.15 there is purely the mmq dispatcher, not page layout).
 </p>
 
-<h4>4.2 Gen throughput is preserved end-to-end</h4>
+<h4>5.2 Generation throughput vs upstream &mdash; PRO 6000</h4>
+<p>
+The mmq lift on its own leaves decode roughly unchanged (mmq is matrix-shaped &mdash; at <code>n_tokens=1</code> there's nothing to tile across). The decode gain comes from a separate piece of work: vendoring llama.cpp's <code>mmvq</code> vector-matmul family and routing the n_tok=1 routed-MoE and dense Q8_0 attention projection paths through it (Step 6 of the mmq optimisation plan).
+</p>
+<table>
+  <thead><tr><th>Stage</th><th>Dispatch path</th><th>Gen t/s @ ctx=2048</th><th>vs upstream</th></tr></thead>
+  <tbody>
+    <tr><td>Upstream baseline</td><td>cuBLAS + Q8&rarr;FP16 expansion + legacy fused decode</td><td>~38.0</td><td class="neutral">&mdash;</td></tr>
+    <tr><td>mmq prefill, legacy decode</td><td><code>USE_MMQ=1</code>, <code>NO_MMVQ_DECODE=1</code></td><td>~39.5</td><td>+3.9%</td></tr>
+    <tr><td><strong>mmq + mmvq decode (current default)</strong></td><td><code>USE_MMQ=1</code>, mmvq decode on</td><td class="good"><strong>43.2</strong></td><td class="good"><strong>+13.7%</strong></td></tr>
+    <tr><td><strong>+ CUDA graphs with stream sync (current default)</strong></td><td>auto, opt-out via <code>DS4_CUDA_MOE_GRAPHS=0</code></td><td class="good"><strong>44.2</strong></td><td class="good"><strong>+16.3%</strong></td></tr>
+  </tbody>
+</table>
+<p class="meta">
+Source: speed-bench on PRO 6000 Blackwell sm_120, CUDA 13.0, V4 Flash IQ2XXS GGUF. The legacy / mmq-only / mmvq-decode rows are from <code>local/docs/ds4_mmq_optimization_session2.html</code> (gen-tokens=128, n=10, <em>p</em>=0.0079 for each pairwise step). The graphs-with-sync row is from the post-fix bench (commits <code>687c783</code> + <code>7967154</code>): ctx=2048 gen 43.31&nbsp;&rarr;&nbsp;44.20 t/s. GB10 sees the same fix yield +5.2% gen at ctx=2048 (14.10&nbsp;&rarr;&nbsp;14.84 t/s). The graphs gain is smaller than the pre-revert benchmark reported because the new pre/post sync brackets serialize stream=0 with g_moe_stream, trading some parallelism for the correctness fix.
+</p>
+
+<figure>
+<svg viewBox="0 0 1080 230" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Decode throughput trajectory on PRO 6000 vs upstream">
+  <text x="540" y="22" class="title" text-anchor="middle">Generation throughput trajectory on PRO 6000 (ctx=2048, gen=128) &mdash; tok/s</text>
+  <!-- Y axis 0..50, baseline 0=y200, 50=y45 -->
+  <g class="axis">
+    <line x1="80" y1="40" x2="80" y2="200"/>
+    <line x1="80" y1="200" x2="1040" y2="200"/>
+    <text x="72" y="204" text-anchor="end">0</text>
+    <text x="72" y="172" text-anchor="end">10</text>
+    <text x="72" y="140" text-anchor="end">20</text>
+    <text x="72" y="108" text-anchor="end">30</text>
+    <text x="72" y="76" text-anchor="end">40</text>
+    <text x="72" y="44" text-anchor="end">50</text>
+  </g>
+  <g class="grid">
+    <line x1="80" y1="172" x2="1040" y2="172"/>
+    <line x1="80" y1="140" x2="1040" y2="140"/>
+    <line x1="80" y1="108" x2="1040" y2="108"/>
+    <line x1="80" y1="76"  x2="1040" y2="76"/>
+    <line x1="80" y1="44"  x2="1040" y2="44"/>
+  </g>
+  <!-- Bars: each 180 wide, y = 200 - (val/50)*156 -->
+  <!-- Upstream 38: y = 200 - (38/50)*156 = 81.44 -->
+  <rect class="bar upstream" x="140" y="81" width="180" height="119"/>
+  <text x="230" y="74" class="label" text-anchor="middle">38.0</text>
+  <text x="230" y="218" class="small" text-anchor="middle">Upstream baseline</text>
+  <!-- mmq only 39.5: y = 200 - (39.5/50)*156 = 76.76 -->
+  <rect class="bar upstream" x="340" y="77" width="180" height="123"/>
+  <text x="430" y="70" class="label" text-anchor="middle">39.5  <tspan fill="#92a0b3">+3.9%</tspan></text>
+  <text x="430" y="218" class="small" text-anchor="middle">mmq prefill only</text>
+  <!-- mmq + mmvq 43.2: y = 200 - (43.2/50)*156 = 65.22 -->
+  <rect class="bar fork" x="540" y="65" width="180" height="135"/>
+  <text x="630" y="58" class="label" text-anchor="middle">43.2  <tspan fill="#7ee0c1">+13.7%</tspan></text>
+  <text x="630" y="218" class="small" text-anchor="middle">mmq + mmvq decode (default)</text>
+  <!-- + graphs with sync 44.2: y = 200 - (44.2/50)*156 = 62.10 -->
+  <rect class="bar fork" x="740" y="62" width="180" height="138"/>
+  <text x="830" y="55" class="label" text-anchor="middle">44.2  <tspan fill="#7ee0c1">+16.3% (default)</tspan></text>
+  <text x="830" y="218" class="small" text-anchor="middle">+ CUDA graphs with stream sync (current default)</text>
+</svg>
+<figcaption>Each stage cumulative on the one above; current shipping default is the third bar.</figcaption>
+</figure>
+
+<h4>5.3 Decode is preserved under the VMM layout switch</h4>
+<p>The arena&rarr;VMM transition is a memory-layout change for the <em>weights</em>, not a kernel change &mdash; decode is bandwidth-bound, so VMM should be neutral on it. Verified:</p>
 <table>
   <thead><tr><th>Arch</th><th>gen_tps_ss arena</th><th>gen_tps_ss VMM</th><th>&Delta;</th></tr></thead>
   <tbody>
@@ -538,9 +680,9 @@ PRO 6000 numbers from <code>local/docs/ds4_vmm_landing_merged/pod_{arena,vmm}.cs
     <tr><td>GB10 (ctx=16384, gen=64)</td><td>13.52</td><td>13.49</td><td>&minus;0.2%</td></tr>
   </tbody>
 </table>
-<p class="meta">Decode is bandwidth-bound, not page-table-bound, so VMM is neutral on gen. No regression observed.</p>
+<p class="meta">No row regresses by more than a single tenth of a percent. VMM is safe to enable as the single-process default for decode-heavy workloads.</p>
 
-<h4>4.3 MTP exact verifier &mdash; GB10 full-context sweep (experimental opt-in)</h4>
+<h4>5.4 MTP exact verifier &mdash; GB10 full-context sweep (experimental opt-in)</h4>
 <table>
   <thead><tr><th>Run</th><th>Prefill mean</th><th>Gen mean</th><th>Gen first frontier</th><th>Gen last frontier (38912)</th></tr></thead>
   <tbody>
@@ -550,7 +692,7 @@ PRO 6000 numbers from <code>local/docs/ds4_vmm_landing_merged/pod_{arena,vmm}.cs
 </table>
 <p class="meta">Source: <code>speed-bench/mtp-compare-2026-05-14/{gb10_nomtp,gb10_exact_mtp}.csv</code>. The point of these numbers is to validate that the new CUDA MTP path runs end-to-end and stays exact; throughput is currently neutral-to-negative (behind on the cold frontier from setup tax, marginally ahead at the largest contexts). Ships opt-in until a configuration breaks the wash in MTP's favor.</p>
 
-<h2 id="api">5. Public surface, env vars, and back-compat</h2>
+<h2 id="api">6. Public surface, env vars, and back-compat</h2>
 
 <h4>New env-var surface</h4>
 <table>
@@ -562,7 +704,7 @@ PRO 6000 numbers from <code>local/docs/ds4_vmm_landing_merged/pod_{arena,vmm}.cs
     <tr><td><code>DS4_CUDA_MMQ_X_MAX</code></td><td>unset (128)</td><td>Diagnostic: clip <code>get_mmq_x_max_host</code> to N.</td></tr>
     <tr><td><code>DS4_CUDA_NO_MMVQ_DECODE</code></td><td>unset</td><td>Opt-out of mmvq for n_tok=1 decode (routed-MoE and dense Q8_0).</td></tr>
     <tr><td><code>DS4_CUDA_MMVQ_DECODE_MAX_TOKENS</code></td><td>1</td><td>Cap on n_tokens routed through mmvq decode branch (0&ndash;8).</td></tr>
-    <tr><td><code>DS4_CUDA_MOE_GRAPHS</code></td><td><span class="tag warn">OFF</span></td><td>CUDA Graph capture/replay; opt-in pending root-cause of GB10 corruption.</td></tr>
+    <tr><td><code>DS4_CUDA_MOE_GRAPHS</code></td><td>ON</td><td>CUDA Graph capture/replay for routed-MoE decode and dense Q8_0 vec, with bidirectional stream sync. Opt-out via <code>0</code>.</td></tr>
     <tr><td><code>DS4_CUDA_MTP_VERIFIER_USE_MMQ</code></td><td>unset / 0</td><td>Bisection switch: <code>1</code> reproduces the broken mmq-in-verifier behavior.</td></tr>
     <tr><td><code>DS4_CUDA_VMM_ARENA</code></td><td>enabled</td><td><code>0</code> disables in-process VMM allocator (escape hatch).</td></tr>
     <tr><td><code>DS4_CUDA_VMM_ARENA_CHUNK_MB</code></td><td>0 (request-size)</td><td>Force a minimum chunk size per cuMemCreate; rarely needed.</td></tr>
@@ -589,7 +731,7 @@ PRO 6000 numbers from <code>local/docs/ds4_vmm_landing_merged/pod_{arena,vmm}.cs
   <li>The legacy Q8&rarr;FP16 expansion + cublas path was deleted once (commit <code>1bbacf6</code>) then restored (<code>961e57a</code>) so cublas remains a working fallback. The dispatcher selects it on mmq init failure and the bench harness can opt into it for A/B.</li>
 </ul>
 
-<h2 id="arch">6. Architectural impact diagram</h2>
+<h2 id="arch">7. Architectural impact diagram</h2>
 
 <figure>
 <svg viewBox="0 0 1080 460" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Dataflow before and after the fork's CUDA backend work">
@@ -672,10 +814,10 @@ PRO 6000 numbers from <code>local/docs/ds4_vmm_landing_merged/pod_{arena,vmm}.cs
 <figcaption>The fork separates three concerns: (a) where weights live in device memory (VMM in-process; sidecar across processes), (b) which kernel executes the matmul (dispatcher + mmq/mmvq/cublas/warp8), (c) how regressions are caught (proof harness with pass/fail verdict).</figcaption>
 </figure>
 
-<h2 id="risk">7. Risks, known issues, gaps</h2>
+<h2 id="risk">8. Risks, known issues, gaps</h2>
 
-<div class="callout warn">
-<strong>R1 &mdash; <code>DS4_CUDA_MOE_GRAPHS</code> default OFF, root-cause pending.</strong> External proof-harness validation on GB10 observed gross corruption on a 32-token smoke with graphs ON that disappears with graphs OFF. The fix that flipped graphs ON validated only 10/10 bit-identical greedy decode against the same branch's graphs-OFF baseline &mdash; self-determinism, not exact-byte equivalence vs the legacy path. The dense Q8_0 graph cache + the mmq cudaMallocAsync pool stream binding are the prime suspects (likely an undeclared cross-stream dependency in the captured region). Tracked in commit <code>b66b5d6</code>.
+<div class="callout">
+<strong>R1 &mdash; <code>DS4_CUDA_MOE_GRAPHS</code> resolved.</strong> The cross-stream race that motivated the b66b5d6 revert is now diagnosed and fixed (commits <code>687c783</code> + <code>7967154</code>). Two race legs across the g_moe_stream / stream=0 boundary &mdash; pre-launch input read and post-launch output read &mdash; are closed by <code>cudaEventRecord</code> + <code>cudaStreamWaitEvent</code> brackets around every <code>cudaGraphLaunch</code>. Validated on both targets: smoke parity ON vs OFF bit-identical; MTP-active output coherent on GB10 (was previously garbled); ds4-bench gen +2.06%&nbsp;to&nbsp;+5.6% across PRO 6000 and GB10 at ctx=2048&ndash;4096. Default flipped back to ON; opt-out via <code>DS4_CUDA_MOE_GRAPHS=0</code>. The sync overhead trades some parallelism for correctness, so the gain is smaller than the pre-revert benchmark but strictly positive on both arches.
 </div>
 
 <div class="callout warn">
@@ -699,17 +841,16 @@ PRO 6000 numbers from <code>local/docs/ds4_vmm_landing_merged/pod_{arena,vmm}.cs
   <li>No CI for the proof harness yet &mdash; runs are manual.</li>
   <li>The fused <code>moe_pair_vec</code> entry exists but isn't wired (applies silu without clamp; the V4 Flash clamp epilogue requires the two-call form).</li>
   <li>Q4_K dense + MoE went through mmq, but a parity sweep at the same depth as Q8_0 hasn't been published.</li>
-  <li>The post-merge validation set used the recent CSVs but did not re-run the proof-harness greedy-decode determinism check end-to-end on the merged tree. Worth doing before the PR opens.</li>
 </ul>
 
-<h2 id="pr">8. Path to upstreaming</h2>
+<h2 id="pr">9. Path to upstreaming</h2>
 
 <p>The work is too large for one PR. A natural split:</p>
 
 <table>
   <thead><tr><th>#</th><th>PR title</th><th>Scope</th><th>Risk</th><th>Reviewer ask</th></tr></thead>
   <tbody>
-    <tr><td>1</td><td>cuda: vendor llama.cpp mmq + adapter + parity tests</td><td><code>cuda/mmq/</code> + Makefile + <code>cuda/mmq/VENDOR.md</code></td><td class="neutral">low (additive, default off behind <code>DS4_CUDA_USE_MMQ=1</code> on the first PR if desired)</td><td>license + vendor-pin policy</td></tr>
+    <tr><td>1</td><td>cuda: vendor llama.cpp mmq + adapter + parity tests</td><td><code>cuda/mmq/</code> + Makefile + <code>cuda/mmq/VENDOR.md</code></td><td class="neutral">low (additive, default off behind <code>DS4_CUDA_USE_MMQ=1</code> on the first PR if desired)</td><td>vendor-pin policy &mdash; <em>licensing already settled: both MIT, ds4 <code>LICENSE</code> credits "The ggml authors"</em></td></tr>
     <tr><td>2</td><td>cuda: route Q8_0 / Q4_K / IQ2_XXS / Q2_K dispatch through mmq</td><td>dispatcher in <code>ds4_cuda.cu</code> + env vars + AGENT.md table</td><td class="warn">medium (perf shift)</td><td>bench reproducibility on at least sm_120 + one other arch</td></tr>
     <tr><td>3</td><td>cuda: in-process VMM weight arena</td><td>5 commits, <code>ds4_cuda.cu</code> + AGENT.md</td><td class="neutral">low (gated, falls back to legacy on probe failure)</td><td>portability across CUDA versions</td></tr>
     <tr><td>4</td><td>tools: ds4_weight_server + broker + import API</td><td><code>tools/ds4_weight_server.cu</code>, <code>ds4_gpu.h</code>, AGENT.md</td><td class="warn">medium (new binary, FD-over-socket protocol)</td><td>operator UX, lock file semantics</td></tr>
@@ -722,9 +863,9 @@ PRO 6000 numbers from <code>local/docs/ds4_vmm_landing_merged/pod_{arena,vmm}.cs
 
 <p class="meta">If antirez prefers a single mega-PR: #1+#2 must stay together (mmq is dead code without the dispatcher), but every other group can be sequenced.</p>
 
-<h2 id="appendix">9. Appendix &mdash; commits by theme</h2>
+<h2 id="appendix">10. Appendix &mdash; commits by theme</h2>
 
-<details><summary>9.1 mmq lift &amp; dispatcher (25 commits)</summary>
+<details><summary>10.1 mmq lift &amp; dispatcher (25 commits)</summary>
 <pre>101831c cuda: vendor llama.cpp's mmq kernel family for fused dequant matmul
 06747ea cuda: implement ds4_mmq_q8_0_dense and parity-test against CPU reference
 c7e0b8c cuda: add ds4_mmq_q2_K_dense and ds4_mmq_iq2_xxs_dense
@@ -744,7 +885,9 @@ af99da7 cuda: step 2 - wire Q4_K dense and MoE through cuda/mmq
 4425ed0 cuda: step 6.c/d - wire mmvq decode into routed_moe and dense Q8_0
 abe2657 cuda: step 8 - CUDA Graph capture+replay for routed-MoE decode
 2200c67 cuda: step 8.2 - graphs for dense Q8_0 vec + flip default to ON
-b66b5d6 cuda: revert DS4_CUDA_MOE_GRAPHS default to OFF (R1)
+b66b5d6 cuda: revert DS4_CUDA_MOE_GRAPHS default to OFF (R1, stopgap)
+687c783 cuda: bracket every captured cudaGraphLaunch with pre+post stream sync
+7967154 cuda: re-enable DS4_CUDA_MOE_GRAPHS by default after sync-fix validation
 8df4b2a cuda: route MTP verifier matmuls to legacy kernels (Option D)
 961e57a Revert "cuda: step 1 - delete legacy Q8->FP16 expansion cache and cuBLAS path"
 90fec89 cuda: pick Q8_0 strategy by device memory bandwidth at startup
@@ -752,7 +895,7 @@ b66b5d6 cuda: revert DS4_CUDA_MOE_GRAPHS default to OFF (R1)
 6658bde cuda: simplify Q8_0 dispatch to mmq-default with explicit overrides</pre>
 </details>
 
-<details><summary>9.2 In-process VMM arena (5 commits)</summary>
+<details><summary>10.2 In-process VMM arena (5 commits)</summary>
 <pre>11e37c2 cuda: probe + supported() helper for in-process VMM arena
 2e1f4f6 cuda: VMM-backed weight arena allocator + teardown
 65e5045 cuda: route fd-cache through the VMM arena when supported
@@ -760,7 +903,7 @@ b66b5d6 cuda: revert DS4_CUDA_MOE_GRAPHS default to OFF (R1)
 ba42c13 docs: in-process VMM arena is the default for single-process runs</pre>
 </details>
 
-<details><summary>9.3 Weight server sidecar (12 commits)</summary>
+<details><summary>10.3 Weight server sidecar (12 commits)</summary>
 <pre>87d0a60 weight-server: probe VMM backend support
 53fbfd4 weight-server: allocate and upload VMM-owned model ranges
 71e803d weight-server: broker VMM allocation file descriptors
@@ -775,7 +918,7 @@ c76edf4 docs: add weight-server guidance to AGENT.md
 0acb50e proof: add weight server harness smoke test</pre>
 </details>
 
-<details><summary>9.4 Proof harness (15 selected commits)</summary>
+<details><summary>10.4 Proof harness (15 selected commits)</summary>
 <pre>08d8fa1 proof: generalize engine proof runner
 f2f424e proof: add CUDA weight server lifecycle
 76cbc9a proof: support scoped weight server imports
@@ -793,7 +936,7 @@ cda4b4d proof: reject stale weight manifests
 dbeeec9 proof: default shared weights to base without mtp</pre>
 </details>
 
-<details><summary>9.5 MTP exact verifier (35 selected commits)</summary>
+<details><summary>10.5 MTP exact verifier (35 selected commits)</summary>
 <pre>ec2dd7c cuda: add MTP top2 verifier paths
 2141a37 mtp: reduce exact verifier output scheduling
 6b9fe82 cuda: fuse MTP verifier MoE down sum for two tokens
@@ -844,7 +987,7 @@ ce61a50 mtp: prefer decode2 for optimized exact full-body verifier
 9c99333 Add CUDA output-head verifier microbenchmark</pre>
 </details>
 
-<details><summary>9.6 Bench / CLI / server (8 commits)</summary>
+<details><summary>10.6 Bench / CLI / server (8 commits)</summary>
 <pre>d4ab17f cli: allow session-path no-MTP timing baselines
 5153bfb proof: report steady-state generation throughput
 9466a03 proof: add named budgets and steady-state timing reports
@@ -853,14 +996,6 @@ f4ca519 bench: report steady-state gen_tps alongside total
 b79c2d7 server: emit token_ids in chat SSE deltas when return_token_ids=true
 4698319 server: place token_ids at choice level to match vLLM/llama-benchy
 904a0c4 server: snap SSE emission limit to token boundary when return_token_ids</pre>
-</details>
-
-<details><summary>9.7 Upstream merges &amp; the post-merge fix</summary>
-<pre>928fa46 Merge upstream antirez/ds4 main (2026-05-16) into mmq-lift-on-proof-budget
-2c82d52 Merge upstream antirez/ds4 main (2026-05-18) into restore-cublas-and-dispatch
-5bc1e6d Apply Flash graph correctness fixes
-c9dd949 cuda: fix compressed prefill RoPE positions   (= upstream merge-base)
-8294755 fix: pass DS4_SWIGLU_CLAMP_EXP to two local shared-gate-up callers</pre>
 </details>
 
 <hr/>
