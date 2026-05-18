@@ -113,7 +113,7 @@
   </div>
   <div class="card"><h4>Generation throughput</h4>
     <div class="num">+16.3%</div>
-    <div class="lbl">PRO 6000 ctx=2048: <strong>38.0 &rarr; 44.2</strong> gen t/s vs upstream. Layered from mmq prefill (+3.9%), mmvq decode (+13.7% cumulative), and graph capture with bidirectional stream sync (+16.3% cumulative) &mdash; all default-on. GB10 sees +5.2% from graphs alone on top of mmq/mmvq parity.</div>
+    <div class="lbl">PRO 6000 ctx=2048: <strong>38.0 &rarr; 44.2</strong> gen t/s vs upstream. Layered from mmq prefill (+3.9%), mmvq decode (+13.7% cumulative), and graph capture with bidirectional stream sync (+16.3% cumulative) &mdash; all default-on. GB10 gen is flat within run-to-run noise (integrated LPDDR5X caps decode regardless of dispatch path).</div>
   </div>
   <div class="card"><h4>Sidecar payoff</h4>
     <div class="num">N&minus;1</div>
@@ -327,7 +327,7 @@ Knobs: <code>DS4_CUDA_NO_MMVQ_DECODE=1</code> to opt out; <code>DS4_CUDA_MMVQ_DE
 Each kernel sequence in the mmvq routed-MoE decode block and the n_tok=1 dense Q8_0 vec path is captured into a <code>cudaGraphExec_t</code> on first execution with a given (layer-shape, buffer-pointer) tuple. The MoE cache holds 256 entries; the dense Q8_0 cache holds 1024 entries. Replay eliminates ~5&ndash;15&micro;s of CPU&harr;driver round-trip per launch &mdash; the dominant overhead at decode where individual kernels are small.
 </p>
 <div class="callout">
-<strong>Default ON again (commit <code>7967154</code>)</strong> after the cross-stream race that motivated the b66b5d6 revert was diagnosed and fixed. Two legs: (a) captured outputs read by stream=0 without a wait; (b) captured inputs read on g_moe_stream before stream=0 finished writing them. Both are now closed by <code>cudaEventRecord</code> + <code>cudaStreamWaitEvent</code> brackets around every <code>cudaGraphLaunch</code> (commit <code>687c783</code>). Validated on PRO 6000 (sm_120) and GB10 (sm_121): smoke parity ON vs OFF, MTP-active output coherent on the previously-failing path, ds4-bench gen +2.06% to +5.6% across the two arches. Opt-out via <code>DS4_CUDA_MOE_GRAPHS=0</code>.
+<strong>Default ON again (commit <code>7967154</code>)</strong> after the cross-stream race that motivated the b66b5d6 revert was diagnosed and fixed. Two legs: (a) captured outputs read by stream=0 without a wait; (b) captured inputs read on g_moe_stream before stream=0 finished writing them. Both are now closed by <code>cudaEventRecord</code> + <code>cudaStreamWaitEvent</code> brackets around every <code>cudaGraphLaunch</code> (commit <code>687c783</code>). Validated on PRO 6000 (sm_120) and GB10 (sm_121): smoke parity ON vs OFF, MTP-active output coherent on the previously-failing path, ds4-bench gen positive on PRO 6000 (sweep CSV) and flat-within-noise on GB10. Opt-out via <code>DS4_CUDA_MOE_GRAPHS=0</code>.
 </div>
 
 <h4>Parity tests</h4>
@@ -626,7 +626,7 @@ The mmq lift on its own leaves decode roughly unchanged (mmq is matrix-shaped &m
   </tbody>
 </table>
 <p class="meta">
-Source: speed-bench on PRO 6000 Blackwell sm_120, CUDA 13.0, V4 Flash IQ2XXS GGUF. The legacy / mmq-only / mmvq-decode rows are from <code>local/docs/ds4_mmq_optimization_session2.html</code> (gen-tokens=128, n=10, <em>p</em>=0.0079 for each pairwise step). The graphs-with-sync row is from the post-fix bench (commits <code>687c783</code> + <code>7967154</code>): ctx=2048 gen 43.31&nbsp;&rarr;&nbsp;44.20 t/s. GB10 sees the same fix yield +5.2% gen at ctx=2048 (14.10&nbsp;&rarr;&nbsp;14.84 t/s). The graphs gain is smaller than the pre-revert benchmark reported because the new pre/post sync brackets serialize stream=0 with g_moe_stream, trading some parallelism for the correctness fix.
+Source: speed-bench on PRO 6000 Blackwell sm_120, CUDA 13.0, V4 Flash IQ2XXS GGUF. The legacy / mmq-only / mmvq-decode rows are from <code>local/docs/ds4_mmq_optimization_session2.html</code> (gen-tokens=128, n=10, <em>p</em>=0.0079 for each pairwise step). The graphs-with-sync row is from the post-fix bench (commits <code>687c783</code> + <code>7967154</code>): ctx=2048 gen 43.31&nbsp;&rarr;&nbsp;44.20 t/s. On GB10 the same fix doesn't translate into a measurable decode gain: the committed sweep CSV shows gen at ctx=2048 as 14.17&nbsp;&rarr;&nbsp;14.16 t/s, flat within run-to-run noise. LPDDR5X bandwidth caps GB10 decode regardless of dispatch path. The PRO 6000 graphs gain is also smaller than the pre-revert benchmark because the new pre/post sync brackets serialize stream=0 with g_moe_stream, trading some parallelism for the correctness fix.
 </p>
 
 <figure>
@@ -921,7 +921,7 @@ Both CUDA rows use the imatrix-tuned q2 variant (<code>...-imatrix.gguf</code>) 
 <h2 id="risk">8. Risks, known issues, gaps</h2>
 
 <div class="callout">
-<strong>R1 &mdash; <code>DS4_CUDA_MOE_GRAPHS</code> resolved.</strong> The cross-stream race that motivated the b66b5d6 revert is now diagnosed and fixed (commits <code>687c783</code> + <code>7967154</code>). Two race legs across the g_moe_stream / stream=0 boundary &mdash; pre-launch input read and post-launch output read &mdash; are closed by <code>cudaEventRecord</code> + <code>cudaStreamWaitEvent</code> brackets around every <code>cudaGraphLaunch</code>. Validated on both targets: smoke parity ON vs OFF bit-identical; MTP-active output coherent on GB10 (was previously garbled); ds4-bench gen +2.06%&nbsp;to&nbsp;+5.6% across PRO 6000 and GB10 at ctx=2048&ndash;4096. Default flipped back to ON; opt-out via <code>DS4_CUDA_MOE_GRAPHS=0</code>. The sync overhead trades some parallelism for correctness, so the gain is smaller than the pre-revert benchmark but strictly positive on both arches.
+<strong>R1 &mdash; <code>DS4_CUDA_MOE_GRAPHS</code> resolved.</strong> The cross-stream race that motivated the b66b5d6 revert is now diagnosed and fixed (commits <code>687c783</code> + <code>7967154</code>). Two race legs across the g_moe_stream / stream=0 boundary &mdash; pre-launch input read and post-launch output read &mdash; are closed by <code>cudaEventRecord</code> + <code>cudaStreamWaitEvent</code> brackets around every <code>cudaGraphLaunch</code>. Validated on both targets: smoke parity ON vs OFF bit-identical; MTP-active output coherent on GB10 (was previously garbled); ds4-bench gen positive on PRO 6000 in the committed sweep, flat within run-to-run noise on GB10 (LPDDR5X bandwidth-bound). Default flipped back to ON; opt-out via <code>DS4_CUDA_MOE_GRAPHS=0</code>. The sync overhead trades some parallelism for correctness, so the gain is smaller than the pre-revert benchmark and the GB10 gain in particular does not survive into the committed sweep.
 </div>
 
 <div class="callout warn">
