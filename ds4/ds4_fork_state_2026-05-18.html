@@ -721,9 +721,9 @@ Single-run CLI numbers for both CUDA targets alongside the existing Mac entries 
   <text x="590" y="236" class="label" text-anchor="middle">448.8</text>
   <text x="590" y="298" class="small" text-anchor="middle">Mac Studio M3 Ultra</text>
   <text x="590" y="312" class="small" text-anchor="middle">Metal, 512 GB, q4</text>
-  <!-- GB10 404.77 -->
+  <!-- GB10 403.57 -->
   <rect class="bar fork" x="715" y="246" width="150" height="34"/>
-  <text x="790" y="239" class="label" text-anchor="middle">404.8</text>
+  <text x="790" y="239" class="label" text-anchor="middle">403.6</text>
   <text x="790" y="298" class="small" text-anchor="middle">DGX Spark GB10</text>
   <text x="790" y="312" class="small" text-anchor="middle">CUDA, 128 GB</text>
   <!-- M3 Max q2 250.11 -->
@@ -768,9 +768,9 @@ Single-run CLI numbers for both CUDA targets alongside the existing Mac entries 
   <rect class="bar upstream" x="515" y="158" width="150" height="122"/>
   <text x="590" y="151" class="label" text-anchor="middle">26.6</text>
   <text x="590" y="298" class="small" text-anchor="middle">M3 Ultra q4</text>
-  <!-- GB10 13.79 -->
-  <rect class="bar fork" x="715" y="217" width="150" height="63"/>
-  <text x="790" y="210" class="label" text-anchor="middle">13.8</text>
+  <!-- GB10 13.56 -->
+  <rect class="bar fork" x="715" y="218" width="150" height="62"/>
+  <text x="790" y="211" class="label" text-anchor="middle">13.6</text>
   <text x="790" y="298" class="small" text-anchor="middle">DGX Spark GB10</text>
   <!-- M3 Max q2 21.47 -->
   <rect class="bar upstream" x="915" y="181" width="150" height="99"/>
@@ -781,7 +781,7 @@ Single-run CLI numbers for both CUDA targets alongside the existing Mac entries 
 </figure>
 
 <p class="meta">
-Caveat on the quant: the pod's GGUF is the imatrix-tuned q2 variant (<code>...-imatrix.gguf</code>), while the GB10 box has the non-imatrix q2 variant. Both are q2-class with the same asymmetric quantisation policy (IQ2_XXS gate/up, Q2_K down on routed experts; Q8_0 elsewhere) and the throughput numbers shouldn't differ materially between the two; flagging it here for transparency.
+Both CUDA rows use the imatrix-tuned q2 variant (<code>...-imatrix.gguf</code>) for apples-to-apples comparison. As a sanity check we also re-ran GB10 against the non-imatrix q2 variant: results landed within 0.3&ndash;1.7% of the imatrix numbers across both prefill and gen, i.e. inside run-to-run noise &mdash; imatrix vs non-imatrix doesn't change the throughput story at this granularity.
 </p>
 
 <h4>5.5 MTP exact verifier &mdash; GB10 full-context sweep (experimental opt-in)</h4>
