@@ -72,9 +72,9 @@
 <body>
 
 <h1>ds4 fork: state of the work vs antirez/ds4 main</h1>
-<p class="sub">PR-prep snapshot on branch <code>pr-prep-2026-05-18</code> (HEAD <code>8294755</code>, branched from <code>restore-cublas-and-dispatch</code>).
-118 commits ahead of <code>origin/main</code> at <code>c9dd9499</code>.
-30,445 lines added, 313 deleted across 50 files. Three pillars: CUDA mmq lift, in-process VMM weight arena + sidecar, generalized engine proof harness.</p>
+<p class="sub">PR-prep snapshot on branch <code>pr-prep-2026-05-18</code> (HEAD <code>8c4525b</code>, branched from <code>restore-cublas-and-dispatch</code>).
+132 commits ahead of <code>origin/main</code> at <code>c9dd9499</code>.
+30,723 lines added, 367 deleted across 55 files. Three pillars: CUDA mmq lift, in-process VMM weight arena + sidecar, generalized engine proof harness.</p>
 
 <div class="toc">
 <strong>Contents</strong>
@@ -215,7 +215,7 @@ The first two compound to <strong>5.88&times; prefill throughput</strong> on the
     <tr><td>Modified &mdash; CUDA backend</td><td><code>ds4_cuda.cu</code>, <code>ds4_gpu.h</code></td><td class="good">3,380</td><td class="bad">81</td><td>~1.6 k novel CUDA: 14 MTP verifier kernels (~690 LOC), VMM arena (~250), Q8&rarr;FP16 fallback cache (~300), CUDA graph caches (~160), FD broker (~100), Q8_0 strategy + bandwidth probe (~75), verifier gate (~20). Remainder is mmq/mmvq wiring and refactors.</td></tr>
     <tr><td>Modified &mdash; bench/CLI/server</td><td><code>ds4_bench.c</code>, <code>ds4_cli.c</code>, <code>ds4_server.c</code></td><td class="good">358</td><td class="bad">8</td><td>steady-state gen_tps, no-MTP baselines, token_ids SSE</td></tr>
     <tr><td>Modified &mdash; misc</td><td><code>Makefile</code>, <code>.gitignore</code>, <code>README.md</code>, <code>ds4.h</code>, <code>ds4_metal.m</code></td><td class="good">377</td><td class="bad">22</td><td>build glue + Metal counterparts to GPU API extensions</td></tr>
-    <tr><th>Total</th><th>50 files</th><th class="good">30,445</th><th class="bad">313</th><th>118 commits</th></tr>
+    <tr><th>Total</th><th>55 files</th><th class="good">30,723</th><th class="bad">367</th><th>132 commits</th></tr>
   </tbody>
 </table>
 
@@ -1104,7 +1104,7 @@ b79c2d7 server: emit token_ids in chat SSE deltas when return_token_ids=true
 </details>
 
 <hr/>
-<p class="meta">Generated 2026-05-18 from <code>git log $(git merge-base HEAD origin/main)..HEAD</code> on branch <code>pr-prep-2026-05-18</code> (HEAD <code>8294755</code>). Source CSVs in <code>local/docs/ds4_vmm_landing_merged/</code>; design docs in adjacent <code>ds4_*</code> HTML/markdown files; vendor pin in <code>cuda/mmq/VENDOR.md</code>; operator guides in <code>AGENT.md</code> and <code>docs/{cuda-mtp,proof-harness}/</code>.</p>
+<p class="meta">Generated 2026-05-18 from <code>git log $(git merge-base HEAD origin/main)..HEAD</code> on branch <code>pr-prep-2026-05-18</code> (HEAD <code>8c4525b</code>). Source CSVs in <code>local/docs/ds4_vmm_landing_merged/</code>; design docs in adjacent <code>ds4_*</code> HTML/markdown files; vendor pin in <code>cuda/mmq/VENDOR.md</code>; operator guides in <code>AGENT.md</code> and <code>docs/{cuda-mtp,proof-harness}/</code>.</p>
 
 </body>
 </html>
